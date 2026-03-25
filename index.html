@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RE/MAX Deal Tracker</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc}
+.screen{display:none}.screen.active{display:block}
+.header{background:#0d0d14;border-bottom:1px solid #1a1a26;padding:16px 18px 14px}
+.header-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-icon{width:30px;height:30px;background:#cc0000;border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px;color:#fff;flex-shrink:0}
+.brand-name{font-size:15px;font-weight:800;color:#fff;letter-spacing:-0.02em}
+.brand-sub{font-size:10px;color:#4b5563;letter-spacing:0.08em}
+.header-actions{display:flex;gap:8px;align-items:center}
+.tiles{display:flex;gap:8px;flex-wrap:wrap}
+.tile{flex:1;min-width:110px;background:#111118;border:1px solid #1e1e2a;border-radius:10px;padding:13px 15px}
+.tile-label{color:#4b5563;font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:4px}
+.tile-value{font-size:19px;font-weight:800;letter-spacing:-0.03em}
+.tile-sub{color:#374151;font-size:10px;margin-top:3px}
+.filters{display:flex;gap:6px;padding:10px 16px;overflow-x:auto;border-bottom:1px solid #1a1a26}
+.filter-btn{background:transparent;color:#6b7280;border:1px solid #1e1e2a;border-radius:20px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:Georgia,serif}
+.filter-btn.active{background:#cc0000;color:#fff;border-color:#cc0000}
+.deal-list{padding:10px 14px}
+.deal-card{background:#111118;border:1px solid #1a1a26;border-radius:10px;padding:12px 14px;margin-bottom:7px;cursor:pointer;border-left-width:3px;border-left-style:solid}
+.deal-card:hover{background:#161620}
+.deal-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.deal-left{flex:1;min-width:0}
+.deal-address{color:#e8e4dc;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.deal-parties{color:#4b5563;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.deal-right{text-align:right;flex-shrink:0}
+.deal-comm{color:#34d399;font-size:14px;font-weight:800}
+.deal-days{font-size:10px;margin-top:2px}
+.deal-badges{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap}
+.badge{font-size:10px;font-weight:700;letter-spacing:0.09em;padding:2px 8px;border-radius:20px;text-transform:uppercase;white-space:nowrap}
+.empty{color:#374151;text-align:center;padding:48px 0;font-size:13px}
+.detail-header{background:#0d0d14;border-bottom:1px solid #1a1a26;padding:13px 17px;display:flex;align-items:center;gap:12px}
+.detail-title{flex:1;min-width:0;font-size:13px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-body{padding:15px 17px}
+.detail-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px}
+.detail-comm{color:#34d399;font-size:26px;font-weight:800;letter-spacing:-0.03em}
+.detail-sale{color:#4b5563;font-size:11px;margin-top:2px}
+.paid-row{display:flex;gap:7px;margin-bottom:12px}
+.stage-row{display:flex;gap:6px;margin-bottom:14px}
+.stage-btn{flex:1;border-radius:8px;padding:8px 4px;font-size:10px;font-weight:700;cursor:pointer;font-family:Georgia,serif;border:1px solid}
+.fields-box{background:#111118;border:1px solid #1a1a26;border-radius:10px;margin-bottom:14px;overflow:hidden}
+.field-row{display:flex;gap:10px;padding:9px 13px;border-bottom:1px solid #1a1a26}
+.field-row:last-child{border-bottom:none}
+.field-lbl{color:#374151;font-size:10px;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;min-width:50px;padding-top:1px}
+.field-val{color:#d1cdc7;font-size:12px;flex:1}
+.notes-wrap{margin-bottom:14px}
+.section-lbl{color:#374151;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px}
+.note-row{display:flex;gap:8px;margin-bottom:8px}
+.note-input{flex:1;background:#111118;border:1px solid #1e1e2a;border-radius:8px;padding:9px 11px;color:#e8e4dc;font-size:12px;font-family:Georgia,serif}
+.note-input:focus{outline:none;border-color:#3a3a58}
+.btn-red{background:#cc0000;border:none;color:#fff;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif}
+.note-card{background:#111118;border:1px solid #1a1a26;border-radius:8px;padding:9px 12px;margin-bottom:6px}
+.note-text{color:#e8e4dc;font-size:12px}
+.note-ts{color:#374151;font-size:10px;margin-top:4px}
+.no-notes{color:#1f1f2a;font-size:12px;text-align:center;padding:12px 0}
+.confirm-row{display:flex;gap:8px}
+.form-header{background:#0d0d14;border-bottom:1px solid #1a1a26;padding:13px 17px;display:flex;align-items:center;gap:12px}
+.form-title{font-size:15px;font-weight:800;color:#fff}
+.form-body{padding:16px 17px 60px}
+.form-field{margin-bottom:11px}
+.form-label{color:#4b5563;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:4px;display:block}
+.form-input{width:100%;background:#111118;border:1px solid #1e1e2a;border-radius:8px;padding:10px 12px;color:#e8e4dc;font-size:13px;font-family:Georgia,serif}
+.form-input:focus{outline:none;border-color:#3a3a58}
+.toggle-row{display:flex;gap:8px;margin-bottom:20px}
+.toggle-btn{flex:1;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif;border:1px solid}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);border-radius:10px;padding:9px 18px;font-size:13px;font-weight:600;white-space:nowrap;z-index:9999;pointer-events:none;font-family:Georgia,serif;box-shadow:0 4px 24px rgba(0,0,0,0.6);display:none}
+.btn-back{background:none;border:none;color:#6b7280;cursor:pointer;font-size:22px;line-height:1;padding:0 4px 0 0;font-family:Georgia,serif}
+.btn-edit{background:#1e1e2a;border:1px solid #2a2a38;color:#9ca3af;border-radius:7px;padding:6px 12px;font-size:11px;cursor:pointer;font-family:Georgia,serif}
+.btn-save{background:transparent;border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;font-family:Georgia,serif;border:1px solid}
+.btn-add{background:#cc0000;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif}
+.btn-full{width:100%;background:#cc0000;border:none;color:#fff;border-radius:10px;padding:14px;font-size:14px;font-weight:800;cursor:pointer;font-family:Georgia,serif;letter-spacing:0.04em}
+.btn-delete{width:100%;background:transparent;border:1px solid #2a1515;color:#5a1f1f;border-radius:8px;padding:10px;font-size:11px;font-weight:700;cursor:pointer;font-family:Georgia,serif;text-transform:uppercase;letter-spacing:0.06em}
+.btn-cancel{flex:1;background:transparent;border:1px solid #1e1e2a;color:#6b7280;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif}
+.btn-confirm-del{flex:1;background:#7f1d1d;border:1px solid #991b1b;color:#fca5a5;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif}
+</style>
+</head>
+<body>
+
+<div id="screen-board" class="screen active">
+  <div class="header">
+    <div class="header-top">
+      <div class="brand">
+        <div class="brand-icon">R</div>
+        <div>
+          <div class="brand-name">Deal Tracker</div>
+          <div class="brand-sub">RE/MAX · 65/35 split</div>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="save-btn" class="btn-save" style="color:#34d399;border-color:#1a3a2a" onclick="manualSave()">✓ Saved</button>
+        <button class="btn-add" onclick="openAdd()">+ Add Deal</button>
+      </div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </div>
+  <div class="filters" id="filters"></div>
+  <div class="deal-list" id="deal-list"></div>
+</div>
+
+<div id="screen-detail" class="screen">
+  <div class="detail-header">
+    <button class="btn-back" onclick="showBoard()">←</button>
+    <div class="detail-title" id="detail-title"></div>
+    <button class="btn-edit" onclick="openEdit()">Edit</button>
+  </div>
+  <div class="detail-body" id="detail-body"></div>
+</div>
+
+<div id="screen-form" class="screen">
+  <div class="form-header">
+    <button class="btn-back" onclick="formBack()">←</button>
+    <div class="form-title" id="form-title-label">New Deal</div>
+  </div>
+  <div class="form-body" id="form-body"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+var KEY = "remax-deals-v1";
+var deals = [];
+var activeFilter = "All";
+var currentId = null;
+var formMode = "add";
+var formData = {};
+var confirmDel = false;
+
+var SEED = [
+  {id:1,address:"111 Parkview Place, Bellevue",buyer:"Landen Barr-Bell",seller:"Pat - Bonnie Ball",title:"Fidelity Sandusky",sale:399000,comm:9336.60,stage:"Closed",close:"2026-01-07",paid:true,remax:true,updates:[]},
+  {id:2,address:"2759 Sandhill Rd, Monroeville",buyer:"Tenant",seller:"Pat - Brad Smith & Natalie Kaltenbach",title:"N/A",sale:0,comm:1040,stage:"Closed",close:"2026-01-05",paid:true,remax:true,updates:[]},
+  {id:3,address:"2860 Derussey Rd, Collins",buyer:"Pat - Jeremy Plas",seller:"Norma - Harsar",title:"Tucker",sale:270000,comm:3510,stage:"Closed",close:"2026-02-09",paid:true,remax:true,updates:[]},
+  {id:4,address:"13808 Riley Rd, Milan",buyer:"Jaron Smith - Amy Turton & Jeremy Swiger",seller:"Pat - Anita Marshall",title:"Foundation Title",sale:338000,comm:7250.10,stage:"Closed",close:"2026-02-20",paid:true,remax:true,updates:[]},
+  {id:5,address:"720 Killbourne, Bellevue",buyer:"Pat - Consetta Leonard",seller:"Ed Haynes",title:"Land Title Group",sale:196000,comm:3057.60,stage:"Closed",close:"2026-02-26",paid:true,remax:true,updates:[]},
+  {id:6,address:"29 N Hester, Norwalk",buyer:"Marketing Only",seller:"",title:"",sale:0,comm:1625,stage:"Closed",close:"2026-03-23",paid:false,remax:false,updates:[]},
+  {id:7,address:"18 Lockwood, Milan",buyer:"Adrienne Quillen-Tice",seller:"Pat - Casey Dellisanti",title:"Ally Title",sale:160000,comm:3432,stage:"Closed",close:"2026-03-06",paid:true,remax:true,updates:[]},
+  {id:8,address:"37 State Route 60, New London",buyer:"Pat - Gatschet",seller:"Norma - Harlow",title:"Tucker",sale:502000,comm:6526,stage:"Closed",close:"2026-03-20",paid:false,remax:false,updates:[]},
+  {id:9,address:"4 Oakfield, Norwalk",buyer:"Jaron Smith - Michel",seller:"Pat - Gatschet",title:"First American",sale:304000,comm:7230.60,stage:"Closed",close:"2026-03-18",paid:false,remax:false,updates:[]},
+  {id:10,address:"155 Woodlawn, Norwalk",buyer:"Brittany Laird - Taylor Braden",seller:"Pat - Deb & Dennis Hartley",title:"Chicago Title",sale:178000,comm:4165.20,stage:"Closed",close:"2026-03-16",paid:false,remax:false,updates:[]},
+  {id:11,address:"720 Tracht Meadows, Huron",buyer:"Jamie Knight - Brett Fussner",seller:"Pat - Judy & Karl Bates",title:"Chicago Title Port Clinton",sale:417500,comm:7598.50,stage:"Under Contract",close:"2026-04-06",paid:false,remax:false,updates:[]},
+  {id:12,address:"111 E Tiffin, Willard",buyer:"Pat - Calvin Mason & Madison Gatschet",seller:"Deanna Fishbaugh - Tamara Sayler",title:"First American",sale:154000,comm:3003,stage:"Under Contract",close:"2026-03-31",paid:false,remax:false,updates:[]},
+  {id:13,address:"104 Leisure Lane, Norwalk",buyer:"Kerri Hensel - Ethel M Successor Trustee",seller:"Pat - Mary & Tom Hardy",title:"Wolph",sale:215000,comm:5031,stage:"Under Contract",close:"2026-04-10",paid:false,remax:false,updates:[]}
+];
+
+var ST = {
+  "Under Contract":{border:"#2563eb",bg:"#1e3a5f",txt:"#93c5fd"},
+  "Closed":{border:"#059669",bg:"#14302a",txt:"#6ee7b7"},
+  "Dead":{border:"#6b7280",bg:"#1f1f27",txt:"#9ca3af"}
+};
+
+var FILTERS = [
+  {label:"All",fn:function(){return true;}},
+  {label:"In Contract",fn:function(d){return d.stage==="Under Contract";}},
+  {label:"Closed",fn:function(d){return d.stage==="Closed";}},
+  {label:"Unpaid",fn:function(d){return !d.paid&&d.stage==="Closed";}},
+  {label:"Not in RE/MAX",fn:function(d){return !d.remax;}}
+];
+
+function lsGet(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+function lsSet(k,v){try{localStorage.setItem(k,v);return true;}catch(e){return false;}}
+
+function init(){
+  try{
+    var raw=lsGet(KEY);
+    if(raw){
+      var parsed=JSON.parse(raw);
+      deals=(Array.isArray(parsed)&&parsed.length>0)?parsed:JSON.parse(JSON.stringify(SEED));
+    } else {
+      deals=JSON.parse(JSON.stringify(SEED));
+      lsSet(KEY,JSON.stringify(deals));
+    }
+  } catch(e){
+    deals=JSON.parse(JSON.stringify(SEED));
+  }
+  renderBoard();
+}
+
+function persist(next){
+  deals=next;
+  lsSet(KEY,JSON.stringify(deals));
+  renderBoard();
+}
+
+function manualSave(){
+  lsSet(KEY,JSON.stringify(deals));
+  ping("All changes saved ✓");
+}
+
+function setSaveStatus(s){
+  var btn=document.getElementById("save-btn");
+  if(!btn)return;
+  if(s==="saved"){btn.style.color="#34d399";btn.style.borderColor="#1a3a2a";btn.textContent="✓ Saved";}
+  if(s==="saving"){btn.style.color="#6b7280";btn.style.borderColor="#2a2a38";btn.textContent="⏳ Saving…";}
+}
+
+function $c(n){return n?"$"+Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}):"—";}
+function fmtDate(s){if(!s)return"—";var d=new Date(s+"T12:00:00");return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"2-digit"});}
+function daysUntil(s){if(!s)return null;return Math.ceil((new Date(s+"T12:00:00")-new Date())/86400000);}
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function badge(label,color,bg){return '<span class="badge" style="background:'+bg+';color:'+color+'">'+esc(label)+'</span>';}
+
+function calcStats(){
+  var t=0,p=0,u=0,pi=0,v=0,r=0,uc=0,pc=0,cc=0,rc=0;
+  for(var i=0;i<deals.length;i++){
+    var d=deals[i];
+    t+=d.comm;
+    if(d.paid)p+=d.comm;
+    if(!d.paid&&d.stage==="Closed"){u+=d.comm;uc++;}
+    if(d.stage==="Under Contract"){pi+=d.comm;pc++;}
+    if(d.stage==="Closed"){v+=d.sale;cc++;}
+    if(d.remax&&d.stage==="Closed"){r+=d.comm;rc++;}
+  }
+  return{total:t,paid:p,unpaid:u,pipe:pi,volume:v,remax:r/0.65,unpaidCount:uc,pipeCount:pc,closedCount:cc,remaxCount:rc};
+}
+
+function tile(label,value,color,sub){
+  return '<div class="tile"><div class="tile-label">'+label+'</div><div class="tile-value" style="color:'+color+'">'+value+'</div>'+(sub?'<div class="tile-sub">'+sub+'</div>':'')+'</div>';
+}
+
+function renderBoard(){
+  var st=calcStats();
+  document.getElementById("tiles").innerHTML=
+    tile("Total",$c(st.total),"#34d399","")+
+    tile("Paid",$c(st.paid),"#60a5fa","")+
+    tile("Unpaid",$c(st.unpaid),"#f59e0b",st.unpaidCount+" deals")+
+    tile("Pipeline",$c(st.pipe),"#c084fc",st.pipeCount+" deals")+
+    tile("Closed Volume",$c(st.volume),"#fb923c",st.closedCount+" closed")+
+    tile("RE/MAX CGI",$c(st.remax),"#e879f9",st.remaxCount+" deals · comm ÷ .65");
+
+  var fhtml="";
+  for(var i=0;i<FILTERS.length;i++){
+    var f=FILTERS[i];
+    var cnt=deals.filter(f.fn).length;
+    fhtml+='<button class="filter-btn'+(activeFilter===f.label?" active":"")+'" onclick="setFilter(\''+f.label+'\')">'+esc(f.label)+' ('+cnt+')</button>';
+  }
+  document.getElementById("filters").innerHTML=fhtml;
+
+  var ff=null;
+  for(var i=0;i<FILTERS.length;i++){if(FILTERS[i].label===activeFilter){ff=FILTERS[i];break;}}
+  var visible=ff?deals.filter(ff.fn):deals;
+
+  if(visible.length===0){
+    document.getElementById("deal-list").innerHTML='<div class="empty">No deals here</div>';
+    return;
+  }
+
+  var html="";
+  for(var i=0;i<visible.length;i++){
+    var deal=visible[i];
+    var s=ST[deal.stage]||ST["Dead"];
+    var days=deal.stage==="Under Contract"?daysUntil(deal.close):null;
+    var dcolor=days===null?"":days<=7?"#f87171":days<=14?"#f59e0b":"#4b5563";
+    var dlabel=days===null?"":days>0?days+"d":days===0?"today":Math.abs(days)+"d past";
+    var parties=[deal.buyer,deal.seller].filter(Boolean).join(" · ");
+    html+='<div class="deal-card" style="border-left-color:'+s.border+'" onclick="openDetail('+deal.id+')">';
+    html+='<div class="deal-row"><div class="deal-left"><div class="deal-address">'+esc(deal.address)+'</div>';
+    html+='<div class="deal-parties">'+esc(parties)+'</div></div>';
+    html+='<div class="deal-right"><div class="deal-comm">'+$c(deal.comm)+'</div>';
+    if(days!==null)html+='<div class="deal-days" style="color:'+dcolor+'">'+dlabel+'</div>';
+    html+='</div></div><div class="deal-badges">';
+    html+=badge(deal.stage,s.txt,s.bg);
+    if(!deal.paid&&deal.stage==="Closed")html+=badge("Unpaid","#fcd34d","#292010");
+    if(!deal.remax)html+=badge("Not RE/MAX","#9ca3af","#1a1a22");
+    var nc=deal.updates?deal.updates.length:0;
+    if(nc>0)html+=badge(nc+" note"+(nc>1?"s":""),"#818cf8","#1e1e30");
+    html+='</div></div>';
+  }
+  document.getElementById("deal-list").innerHTML=html;
+}
+
+function setFilter(f){activeFilter=f;renderBoard();}
+
+function openDetail(id){
+  currentId=id;confirmDel=false;
+  renderDetail();show("detail");
+}
+
+function renderDetail(){
+  var deal=null;
+  for(var i=0;i<deals.length;i++){if(deals[i].id===currentId){deal=deals[i];break;}}
+  if(!deal)return;
+  var s=ST[deal.stage]||ST["Dead"];
+  var days=deal.stage==="Under Contract"?daysUntil(deal.close):null;
+  var dcolor=days===null?"":days<=7?"#f87171":days<=14?"#f59e0b":"#6b7280";
+  document.getElementById("detail-title").textContent=deal.address;
+
+  var html='<div class="detail-top"><div>';
+  html+='<div class="detail-comm">'+$c(deal.comm)+'</div>';
+  if(deal.sale>0)html+='<div class="detail-sale">Sale price: '+$c(deal.sale)+'</div>';
+  html+='</div><div style="text-align:right">'+badge(deal.stage,s.txt,s.bg);
+  if(days!==null)html+='<div style="font-size:11px;margin-top:5px;color:'+dcolor+'">Close '+fmtDate(deal.close)+(days>0?" · "+days+"d":days===0?" · today":"")+'</div>';
+  html+='</div></div>';
+
+  html+='<div class="paid-row"><button style="flex:1;background:'+(deal.paid?"#14302a":"#292010")+';border:1px solid '+(deal.paid?"#059669":"#92400e")+';color:'+(deal.paid?"#6ee7b7":"#fcd34d")+';border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif" onclick="togglePaid()">'+(deal.paid?"✓ Paid":"Mark Paid")+'</button></div>';
+
+  html+='<div class="stage-row">';
+  var stages=["Under Contract","Closed","Dead"];
+  for(var i=0;i<stages.length;i++){
+    var sg=stages[i];var ss=ST[sg];var active=deal.stage===sg;
+    html+='<button class="stage-btn" style="background:'+(active?ss.bg:"transparent")+';border-color:'+(active?ss.border:"#1e1e2a")+';color:'+(active?ss.txt:"#374151")+'" onclick="setStage(\''+sg+'\')">'+(sg==="Under Contract"?"Contract":sg)+'</button>';
+  }
+  html+='</div>';
+
+  var fields=[["Buyer",deal.buyer],["Seller",deal.seller],["Title",deal.title],["Close",fmtDate(deal.close)],["RE/MAX",deal.remax?"In RE/MAX stats":"Not in RE/MAX stats"]];
+  html+='<div class="fields-box">';
+  for(var i=0;i<fields.length;i++){
+    var lbl=fields[i][0],val=fields[i][1];
+    if(val&&val!=="—")html+='<div class="field-row"><div class="field-lbl">'+lbl+'</div><div class="field-val">'+esc(val)+'</div></div>';
+  }
+  html+='</div>';
+
+  html+='<div class="notes-wrap"><div class="section-lbl">Notes</div>';
+  html+='<div class="note-row"><input class="note-input" id="note-input" placeholder="Add a note…" onkeydown="if(event.key===\'Enter\')saveNote()">';
+  html+='<button class="btn-red" onclick="saveNote()">Save</button></div>';
+  var updates=deal.updates||[];
+  if(updates.length===0)html+='<div class="no-notes">No notes</div>';
+  for(var i=0;i<updates.length;i++){
+    var u=updates[i];
+    html+='<div class="note-card"><div class="note-text">'+esc(u.text)+'</div><div class="note-ts">'+new Date(u.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"2-digit",hour:"numeric",minute:"2-digit"})+'</div></div>';
+  }
+  html+='</div>';
+
+  if(confirmDel){
+    html+='<div class="confirm-row"><button class="btn-cancel" onclick="confirmDel=false;renderDetail()">Cancel</button><button class="btn-confirm-del" onclick="deleteDeal()">Confirm Delete</button></div>';
+  } else {
+    html+='<button class="btn-delete" onclick="confirmDel=true;renderDetail()">Delete Deal</button>';
+  }
+
+  document.getElementById("detail-body").innerHTML=html;
+}
+
+function togglePaid(){
+  var next=[];
+  for(var i=0;i<deals.length;i++){
+    if(deals[i].id===currentId){var d=Object.assign({},deals[i]);d.paid=!d.paid;next.push(d);}
+    else next.push(deals[i]);
+  }
+  persist(next);
+  ping(next.filter(function(d){return d.id===currentId;})[0].paid?"Marked paid ✓":"Marked unpaid");
+  renderDetail();
+}
+
+function setStage(stage){
+  var next=[];
+  for(var i=0;i<deals.length;i++){
+    if(deals[i].id===currentId){var d=Object.assign({},deals[i]);d.stage=stage;next.push(d);}
+    else next.push(deals[i]);
+  }
+  persist(next);ping("Moved to "+stage);renderDetail();
+}
+
+function saveNote(){
+  var input=document.getElementById("note-input");
+  var text=input.value.trim();if(!text)return;
+  var entry={ts:new Date().toISOString(),text:text};
+  var next=[];
+  for(var i=0;i<deals.length;i++){
+    if(deals[i].id===currentId){
+      var d=Object.assign({},deals[i]);
+      d.updates=[entry].concat(d.updates||[]);
+      next.push(d);
+    } else next.push(deals[i]);
+  }
+  persist(next);ping("Note saved ✓");renderDetail();
+}
+
+function deleteDeal(){
+  var next=deals.filter(function(d){return d.id!==currentId;});
+  persist(next);ping("Deleted");showBoard();
+}
+
+function openAdd(){
+  formMode="add";
+  formData={address:"",buyer:"",seller:"",title:"",sale:"",comm:"",stage:"Under Contract",close:"",paid:false,remax:false};
+  document.getElementById("form-title-label").textContent="New Deal";
+  renderForm();show("form");
+}
+
+function openEdit(){
+  formMode="edit";
+  for(var i=0;i<deals.length;i++){if(deals[i].id===currentId){formData=Object.assign({},deals[i]);break;}}
+  document.getElementById("form-title-label").textContent="Edit Deal";
+  renderForm();show("form");
+}
+
+function formBack(){show(formMode==="add"?"board":"detail");}
+
+function renderForm(){
+  var f=formData;
+  var html=ff("Address *","address","text","123 Main St, City")+
+    ff("Buyer","buyer","text","Agent - Client Name")+
+    ff("Seller","seller","text","Agent - Seller Name")+
+    ff("Title Co","title","text","Title Company")+
+    ff("Sale Price","sale","number","0")+
+    ff("Net Commission (65/35)","comm","number","0.00")+
+    ff("Close Date","close","date","");
+
+  html+='<div class="form-field"><label class="form-label">Stage</label><div class="stage-row">';
+  var stages=["Under Contract","Closed","Dead"];
+  for(var i=0;i<stages.length;i++){
+    var sg=stages[i];var ss=ST[sg];var active=f.stage===sg;
+    html+='<button class="stage-btn" style="background:'+(active?ss.bg:"transparent")+';border-color:'+(active?ss.border:"#1e1e2a")+';color:'+(active?ss.txt:"#374151")+'" onclick="setFormStage(\''+sg+'\')">'+(sg==="Under Contract"?"Contract":sg)+'</button>';
+  }
+  html+='</div></div>';
+
+  html+='<div class="toggle-row">';
+  html+='<button class="toggle-btn" style="background:'+(f.paid?"#14302a":"transparent")+';border-color:'+(f.paid?"#059669":"#1e1e2a")+';color:'+(f.paid?"#6ee7b7":"#374151")+'" onclick="toggleForm(\'paid\')">'+(f.paid?"✓ ":"")+'Paid</button>';
+  html+='<button class="toggle-btn" style="background:'+(f.remax?"#14302a":"transparent")+';border-color:'+(f.remax?"#059669":"#1e1e2a")+';color:'+(f.remax?"#6ee7b7":"#374151")+'" onclick="toggleForm(\'remax\')">'+(f.remax?"✓ ":"")+'In RE/MAX</button>';
+  html+='</div>';
+
+  html+='<button class="btn-full" onclick="saveDeal()">'+(formMode==="add"?"Save Deal":"Update Deal")+'</button>';
+  document.getElementById("form-body").innerHTML=html;
+
+  var keys=["address","buyer","seller","title","sale","comm","close"];
+  for(var i=0;i<keys.length;i++){
+    var el=document.getElementById("ff-"+keys[i]);
+    if(el)el.value=formData[keys[i]]||"";
+  }
+}
+
+function ff(label,key,type,placeholder){
+  return '<div class="form-field"><label class="form-label">'+label+'</label><input id="ff-'+key+'" class="form-input" type="'+type+'" placeholder="'+esc(placeholder)+'" oninput="formData[\''+key+'\']=this.value"></div>';
+}
+
+function setFormStage(sg){formData.stage=sg;renderForm();}
+function toggleForm(k){formData[k]=!formData[k];renderForm();}
+
+function saveDeal(){
+  if(!formData.address||!formData.address.trim())return ping("Address required","warn");
+  var d=Object.assign({},formData);
+  d.sale=parseFloat(d.sale)||0;
+  d.comm=parseFloat(d.comm)||0;
+  if(formMode==="add"){
+    d.id=Date.now();d.updates=[];
+    persist(deals.concat([d]));
+    ping("Deal added ✓");showBoard();
+  } else {
+    var next=[];
+    for(var i=0;i<deals.length;i++){next.push(deals[i].id===d.id?d:deals[i]);}
+    persist(next);ping("Saved ✓");show("detail");renderDetail();
+  }
+}
+
+function show(screen){
+  var all=document.querySelectorAll(".screen");
+  for(var i=0;i<all.length;i++)all[i].classList.remove("active");
+  document.getElementById("screen-"+screen).classList.add("active");
+  window.scrollTo(0,0);
+}
+
+function showBoard(){show("board");renderBoard();}
+
+var toastTimer;
+function ping(msg,type){
+  var t=document.getElementById("toast");
+  var warn=type==="warn";
+  t.style.background=warn?"#292010":"#14302a";
+  t.style.border="1px solid "+(warn?"#92400e":"#059669");
+  t.style.color=warn?"#fcd34d":"#6ee7b7";
+  t.textContent=msg;t.style.display="block";
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){t.style.display="none";},2600);
+}
+
+init();
+</script>
+</body>
+</html>
