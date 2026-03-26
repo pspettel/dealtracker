@@ -51,7 +51,7 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 .fields-box{background:#111118;border:1px solid #1a1a26;border-radius:10px;margin-bottom:14px;overflow:hidden}
 .field-row{display:flex;gap:10px;padding:9px 13px;border-bottom:1px solid #1a1a26}
 .field-row:last-child{border-bottom:none}
-.field-lbl{color:#374151;font-size:10px;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;min-width:60px;padding-top:1px;flex-shrink:0}
+.field-lbl{color:#374151;font-size:10px;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;min-width:70px;padding-top:1px;flex-shrink:0}
 .field-val{color:#d1cdc7;font-size:12px;flex:1}
 .notes-wrap{margin-bottom:14px}
 .section-lbl{color:#374151;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:8px}
@@ -101,6 +101,8 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 .csv-modal-sub{font-size:11px;color:#4b5563;margin-bottom:12px}
 .csv-textarea{width:100%;height:180px;background:#0a0a0f;border:1px solid #1e1e2a;border-radius:8px;padding:10px;color:#9ca3af;font-size:10px;font-family:monospace;resize:none}
 .csv-modal-btns{display:flex;gap:8px;margin-top:12px}
+.client-section{background:#16161f;border:1px solid #2a2535;border-radius:10px;padding:12px 14px;margin-bottom:11px}
+.client-section-label{font-size:10px;font-weight:700;color:#7c3aed;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px}
 </style>
 </head>
 <body>
@@ -116,7 +118,7 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
         </div>
       </div>
       <div class="header-actions">
-        <button id="save-btn" class="btn-save" style="color:#34d399;border-color:#1a3a2a">✓ Saved</button>
+        <button id="save-btn" class="btn-save" style="color:#34d399;border-color:#1a3a2a">Saved</button>
         <button class="btn-add" onclick="openAdd()">+ Add Deal</button>
       </div>
     </div>
@@ -128,12 +130,12 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
   </div>
   <div id="tab-deals">
     <div class="filters" id="filters"></div>
-    <div class="deal-list" id="deal-list"><div class="loading">Loading your deals…</div></div>
+    <div class="deal-list" id="deal-list"><div class="loading">Loading your deals...</div></div>
   </div>
   <div id="tab-clients" style="display:none">
     <div class="clients-header">
       <div class="clients-title">My Clients</div>
-      <button class="btn-export" onclick="exportCSV()">⬇ Export CSV</button>
+      <button class="btn-export" onclick="exportCSV()">Export CSV</button>
     </div>
     <div class="client-list" id="client-list"></div>
   </div>
@@ -184,10 +186,11 @@ var API_KEY = "$2a$10$Jw0jOjJ3zC3xcmklD3sn3eSgHfvGo84McIjbNTWZlY3ElL3ImTemW";
 var BIN_URL = "https://api.jsonbin.io/v3/b/" + BIN_ID;
 
 var deals = [];
+var contacts = {}; // keyed by normalized name: {phone, addr, notes, lastDealId, lastClose}
 var activeFilter = "All";
 var activeTab = "deals";
 var currentId = null;
-var currentClientId = null;
+var currentClientKey = null;
 var formMode = "add";
 var formData = {};
 var confirmDel = false;
@@ -214,479 +217,622 @@ var FILTERS = [
   {label:"Not in RE/MAX",fn:function(d){return !d.remax;}}
 ];
 
-function cloudLoad(callback){
+// ---- NAME HELPERS ----
+
+// Parse legacy "Pat - Client Name" or "Agent - Client Name" format, return client name only
+function legacyExtract(str) {
+  if (!str) return "";
+  str = str.trim();
+  var idx = str.indexOf(" - ");
+  return idx > -1 ? str.substring(idx + 3).trim() : str;
+}
+
+// Normalize a client name to a unique key
+// "Karl and Judy Bates" -> "karl-judy-bates"
+// "Karl & Judy Bates" -> "karl-judy-bates"
+function normalizeKey(name) {
+  if (!name) return "";
+  return name.toLowerCase()
+    .replace(/\s*&\s*/g, " ")
+    .replace(/\s+and\s+/g, " ")
+    .replace(/[^a-z0-9 ]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+// Get all client entries from a deal {key, name, role}
+function getDealClients(deal) {
+  var clients = [];
+  if (!deal.myside) return clients;
+
+  if (deal.myside === "Listing" || deal.myside === "Both") {
+    var name = deal.myClientSeller || legacyExtract(deal.seller);
+    if (name) clients.push({key: normalizeKey(name), name: name, role: "Seller"});
+  }
+  if (deal.myside === "Buyer" || deal.myside === "Both") {
+    var name = deal.myClientBuyer || legacyExtract(deal.buyer);
+    if (name) clients.push({key: normalizeKey(name), name: name, role: "Buyer"});
+  }
+  return clients;
+}
+
+// ---- CLOUD ----
+
+function cloudLoad(callback) {
   setSaveStatus("loading");
-  fetch(BIN_URL+"/latest",{headers:{"X-Master-Key":API_KEY,"X-Bin-Meta":"false"}})
-  .then(function(r){return r.json();})
-  .then(function(data){
-    deals=(data&&Array.isArray(data.deals)&&data.deals.length>0)?data.deals:[];
-    setSaveStatus("saved");callback();
-  })
-  .catch(function(){
-    try{var raw=localStorage.getItem("remax-deals-v1");deals=raw?JSON.parse(raw):[];}catch(e){deals=[];}
-    setSaveStatus("saved");ping("Loaded offline copy","warn");callback();
-  });
-}
-
-function cloudSave(showToast){
-  setSaveStatus("saving");
-  fetch(BIN_URL,{method:"PUT",headers:{"Content-Type":"application/json","X-Master-Key":API_KEY},body:JSON.stringify({deals:deals})})
-  .then(function(r){return r.json();})
-  .then(function(){
+  fetch(BIN_URL + "/latest", {headers: {"X-Master-Key": API_KEY, "X-Bin-Meta": "false"}})
+  .then(function(r) {return r.json();})
+  .then(function(data) {
+    deals = (data && Array.isArray(data.deals) && data.deals.length > 0) ? data.deals : [];
+    contacts = (data && data.contacts) ? data.contacts : {};
     setSaveStatus("saved");
-    try{localStorage.setItem("remax-deals-v1",JSON.stringify(deals));}catch(e){}
-    if(showToast)ping("Saved ✓");
+    callback();
   })
-  .catch(function(){
-    setSaveStatus("error");ping("Save failed - check connection","warn");
-    try{localStorage.setItem("remax-deals-v1",JSON.stringify(deals));}catch(e){}
+  .catch(function() {
+    try {
+      var raw = localStorage.getItem("remax-deals-v1");
+      var parsed = raw ? JSON.parse(raw) : {};
+      deals = parsed.deals || [];
+      contacts = parsed.contacts || {};
+    } catch(e) {deals = []; contacts = {};}
+    setSaveStatus("saved");
+    ping("Loaded offline copy", "warn");
+    callback();
   });
 }
 
-function persist(next,silent){
-  deals=next;
-  try{localStorage.setItem("remax-deals-v1",JSON.stringify(deals));}catch(e){}
+function cloudSave(showToast) {
+  setSaveStatus("saving");
+  var payload = {deals: deals, contacts: contacts};
+  fetch(BIN_URL, {method: "PUT", headers: {"Content-Type": "application/json", "X-Master-Key": API_KEY}, body: JSON.stringify(payload)})
+  .then(function(r) {return r.json();})
+  .then(function() {
+    setSaveStatus("saved");
+    try {localStorage.setItem("remax-deals-v1", JSON.stringify(payload));} catch(e) {}
+    if (showToast) ping("Saved");
+  })
+  .catch(function() {
+    setSaveStatus("error");
+    ping("Save failed - check connection", "warn");
+    try {localStorage.setItem("remax-deals-v1", JSON.stringify(payload));} catch(e) {}
+  });
+}
+
+function persist(nextDeals, silent) {
+  deals = nextDeals;
+  rebuildContacts();
+  try {localStorage.setItem("remax-deals-v1", JSON.stringify({deals: deals, contacts: contacts}));} catch(e) {}
   renderBoard();
   clearTimeout(saveTimer);
-  saveTimer=setTimeout(function(){cloudSave(!silent);},800);
+  saveTimer = setTimeout(function() {cloudSave(!silent);}, 800);
 }
 
-function setSaveStatus(s){
-  var btn=document.getElementById("save-btn");if(!btn)return;
-  if(s==="saved")  {btn.style.color="#34d399";btn.style.borderColor="#1a3a2a";btn.textContent="✓ Saved";}
-  if(s==="saving") {btn.style.color="#6b7280";btn.style.borderColor="#2a2a38";btn.textContent="⏳ Saving…";}
-  if(s==="loading"){btn.style.color="#6b7280";btn.style.borderColor="#2a2a38";btn.textContent="⏳ Loading…";}
-  if(s==="error")  {btn.style.color="#f87171";btn.style.borderColor="#5a1f1f";btn.textContent="⚠ Save Error";}
-}
+// ---- CONTACTS ----
 
-function $c(n){return n?"$"+Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}):"—";}
-function fmtDate(s){if(!s)return"—";var d=new Date(s+"T12:00:00");return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"2-digit"});}
-function daysUntil(s){if(!s)return null;return Math.ceil((new Date(s+"T12:00:00")-new Date())/86400000);}
-function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
-function badge(label,color,bg){return '<span class="badge" style="background:'+bg+';color:'+color+'">'+esc(label)+'</span>';}
+// Rebuild contacts index from all deals, preserving manually entered phone/addr/notes
+function rebuildContacts() {
+  var newContacts = {};
 
-function extractMyClient(str){
-  if(!str)return"";str=str.trim();
-  var idx=str.indexOf(" - ");
-  return idx>-1?str.substring(idx+3).trim():str;
-}
+  // Sort deals by close date so most recent wins
+  var sorted = deals.slice().sort(function(a, b) {
+    var da = a.close || "";
+    var db = b.close || "";
+    return da > db ? 1 : da < db ? -1 : 0;
+  });
 
-function getClientField(dealId,role,field){
-  for(var i=0;i<deals.length;i++){
-    if(deals[i].id===dealId){var key="client"+field+"_";return(deals[i][key]&&deals[i][key][role])||"";}
-  }
-  return"";
-}
-
-function setClientField(dealId,role,field,value){
-  var next=[];
-  for(var i=0;i<deals.length;i++){
-    if(deals[i].id===dealId){
-      var d=Object.assign({},deals[i]);var key="client"+field+"_";
-      if(!d[key])d[key]={};d[key]=Object.assign({},d[key]);d[key][role]=value;next.push(d);
-    } else next.push(deals[i]);
-  }
-  persist(next,true);
-}
-
-function buildClients(){
-  var map={};
-  for(var i=0;i<deals.length;i++){
-    var d=deals[i];if(!d.myside)continue;
-    var entries=[];
-    if(d.myside==="Listing"||d.myside==="Both"){var n=extractMyClient(d.seller);if(n)entries.push({name:n,role:"Seller",deal:d});}
-    if(d.myside==="Buyer"||d.myside==="Both"){var n=extractMyClient(d.buyer);if(n)entries.push({name:n,role:"Buyer",deal:d});}
-    for(var j=0;j<entries.length;j++){
-      var e=entries[j];var key=e.name.toLowerCase().trim()+"|"+e.role;
-      if(!map[key])map[key]={name:e.name,role:e.role,dealAddress:d.address,closeDate:d.close,dealId:d.id};
+  for (var i = 0; i < sorted.length; i++) {
+    var deal = sorted[i];
+    var clients = getDealClients(deal);
+    for (var j = 0; j < clients.length; j++) {
+      var c = clients[j];
+      if (!c.key) continue;
+      var existing = newContacts[c.key] || contacts[c.key] || {};
+      newContacts[c.key] = {
+        name: c.name,
+        role: c.role,
+        phone: existing.phone || "",
+        addr: existing.addr || "",
+        notes: existing.notes || "",
+        lastDealId: deal.id,
+        lastDealAddr: deal.address,
+        lastClose: deal.close
+      };
     }
   }
-  var list=[];for(var k in map)list.push(map[k]);
-  list.sort(function(a,b){return a.name.localeCompare(b.name);});
+  contacts = newContacts;
+}
+
+function buildClientList() {
+  var list = [];
+  for (var k in contacts) {
+    list.push(Object.assign({key: k}, contacts[k]));
+  }
+  list.sort(function(a, b) {return a.name.localeCompare(b.name);});
   return list;
 }
 
-function switchTab(tab){
-  activeTab=tab;
-  var tabs=document.querySelectorAll(".tab-btn");
-  tabs[0].classList.toggle("active",tab==="deals");
-  tabs[1].classList.toggle("active",tab==="clients");
-  document.getElementById("tab-deals").style.display=tab==="deals"?"block":"none";
-  document.getElementById("tab-clients").style.display=tab==="clients"?"block":"none";
-  if(tab==="clients")renderClients();
+function setSaveStatus(s) {
+  var btn = document.getElementById("save-btn"); if (!btn) return;
+  if (s === "saved")   {btn.style.color="#34d399"; btn.style.borderColor="#1a3a2a"; btn.textContent="Saved";}
+  if (s === "saving")  {btn.style.color="#6b7280"; btn.style.borderColor="#2a2a38"; btn.textContent="Saving...";}
+  if (s === "loading") {btn.style.color="#6b7280"; btn.style.borderColor="#2a2a38"; btn.textContent="Loading...";}
+  if (s === "error")   {btn.style.color="#f87171"; btn.style.borderColor="#5a1f1f"; btn.textContent="Save Error";}
 }
 
-function renderClients(){
-  var clients=buildClients();
-  if(clients.length===0){
-    document.getElementById("client-list").innerHTML='<div class="empty">No clients yet — tag your side on each deal to populate this list.</div>';return;
+function $c(n) {return n ? "$" + Number(n).toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2}) : "-";}
+function fmtDate(s) {if (!s) return "-"; var d = new Date(s + "T12:00:00"); return d.toLocaleDateString("en-US", {month:"short",day:"numeric",year:"2-digit"});}
+function daysUntil(s) {if (!s) return null; return Math.ceil((new Date(s + "T12:00:00") - new Date()) / 86400000);}
+function esc(s) {return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function badge(label, color, bg) {return '<span class="badge" style="background:'+bg+';color:'+color+'">'+esc(label)+'</span>';}
+
+// ---- RENDER BOARD ----
+
+function switchTab(tab) {
+  activeTab = tab;
+  var tabs = document.querySelectorAll(".tab-btn");
+  tabs[0].classList.toggle("active", tab === "deals");
+  tabs[1].classList.toggle("active", tab === "clients");
+  document.getElementById("tab-deals").style.display = tab === "deals" ? "block" : "none";
+  document.getElementById("tab-clients").style.display = tab === "clients" ? "block" : "none";
+  if (tab === "clients") renderClients();
+}
+
+function renderClients() {
+  var list = buildClientList();
+  if (!list.length) {
+    document.getElementById("client-list").innerHTML = '<div class="empty">No clients yet. Tag your side on each deal to populate this list.</div>';
+    return;
   }
-  var html="";
-  for(var i=0;i<clients.length;i++){
-    var c=clients[i];var mc=MYSIDE_COLORS[c.role==="Seller"?"Listing":"Buyer"];
-    var phone=getClientField(c.dealId,c.role,"Phone");
-    var addr=getClientField(c.dealId,c.role,"Addr");
-    html+='<div class="client-card" onclick="openClientDetail('+c.dealId+',\''+c.role+'\')">';
-    html+='<div class="deal-row"><div class="deal-left">';
-    html+='<div class="client-name">'+esc(c.name)+'</div>';
-    html+='<div class="client-meta">'+esc(c.dealAddress)+'</div>';
-    if(addr)html+='<div class="client-meta" style="color:#9ca3af">'+esc(addr)+'</div>';
-    if(phone)html+='<div class="client-meta" style="color:#9ca3af">'+esc(phone)+'</div>';
-    html+='</div><div class="deal-right" style="text-align:right">';
-    html+=badge(c.role==="Seller"?"Listing":"Buyer",mc.txt,mc.bg);
-    html+='<div style="font-size:10px;color:#374151;margin-top:4px">'+fmtDate(c.closeDate)+'</div>';
-    html+='</div></div></div>';
+  var html = "";
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    var mc = MYSIDE_COLORS[c.role === "Seller" ? "Listing" : "Buyer"];
+    html += '<div class="client-card" onclick="openClientDetail(\''+esc(c.key)+'\')">';
+    html += '<div class="deal-row"><div class="deal-left">';
+    html += '<div class="client-name">'+esc(c.name)+'</div>';
+    html += '<div class="client-meta">'+esc(c.lastDealAddr || "")+'</div>';
+    if (c.addr) html += '<div class="client-meta" style="color:#9ca3af">'+esc(c.addr)+'</div>';
+    if (c.phone) html += '<div class="client-meta" style="color:#9ca3af">'+esc(c.phone)+'</div>';
+    html += '</div><div class="deal-right" style="text-align:right">';
+    html += badge(c.role === "Seller" ? "Listing" : "Buyer", mc.txt, mc.bg);
+    html += '<div style="font-size:10px;color:#374151;margin-top:4px">'+fmtDate(c.lastClose)+'</div>';
+    html += '</div></div></div>';
   }
-  document.getElementById("client-list").innerHTML=html;
+  document.getElementById("client-list").innerHTML = html;
 }
 
-function openClientDetail(dealId,role){
-  currentClientId={dealId:dealId,role:role};renderClientDetail();show("client");
+function openClientDetail(key) {
+  currentClientKey = key;
+  renderClientDetail();
+  show("client");
 }
 
-function renderClientDetail(){
-  var dealId=currentClientId.dealId;var role=currentClientId.role;
-  var deal=null;
-  for(var i=0;i<deals.length;i++){if(deals[i].id===dealId){deal=deals[i];break;}}
-  if(!deal)return;
-  var rawName=role==="Seller"?deal.seller:deal.buyer;
-  var name=extractMyClient(rawName);
-  var mc=MYSIDE_COLORS[role==="Seller"?"Listing":"Buyer"];
-  document.getElementById("client-detail-title").textContent=name;
-  var phone=getClientField(dealId,role,"Phone");
-  var addr=getClientField(dealId,role,"Addr");
-  var notes=getClientField(dealId,role,"Notes");
-  var html='<div style="margin-bottom:14px">'+badge(role==="Seller"?"Listing Side":"Buyer Side",mc.txt,mc.bg)+'</div>';
-  html+='<div class="fields-box" style="margin-bottom:14px">';
-  html+='<div class="field-row"><div class="field-lbl">Deal</div><div class="field-val">'+esc(deal.address)+'</div></div>';
-  html+='<div class="field-row"><div class="field-lbl">Closed</div><div class="field-val">'+fmtDate(deal.close)+'</div></div>';
-  html+='</div>';
-  html+='<div class="form-field"><label class="form-label">Current / Mailing Address</label>';
-  html+='<input class="form-input" value="'+esc(addr)+'" placeholder="123 Main St, City, State ZIP" oninput="setClientField('+dealId+',\''+role+'\',\'Addr\',this.value)"></div>';
-  html+='<div class="form-field"><label class="form-label">Phone</label>';
-  html+='<input class="form-input" type="tel" value="'+esc(phone)+'" placeholder="(555) 555-5555" oninput="setClientField('+dealId+',\''+role+'\',\'Phone\',this.value)"></div>';
-  html+='<div class="form-field"><label class="form-label">Notes</label>';
-  html+='<input class="form-input" value="'+esc(notes)+'" placeholder="Prospecting notes…" oninput="setClientField('+dealId+',\''+role+'\',\'Notes\',this.value)"></div>';
-  document.getElementById("client-detail-body").innerHTML=html;
+function renderClientDetail() {
+  var c = contacts[currentClientKey];
+  if (!c) return;
+  var mc = MYSIDE_COLORS[c.role === "Seller" ? "Listing" : "Buyer"];
+  document.getElementById("client-detail-title").textContent = c.name;
+  var html = '<div style="margin-bottom:14px">'+badge(c.role === "Seller" ? "Listing Side" : "Buyer Side", mc.txt, mc.bg)+'</div>';
+  html += '<div class="fields-box" style="margin-bottom:14px">';
+  html += '<div class="field-row"><div class="field-lbl">Last Deal</div><div class="field-val">'+esc(c.lastDealAddr || "-")+'</div></div>';
+  html += '<div class="field-row"><div class="field-lbl">Closed</div><div class="field-val">'+fmtDate(c.lastClose)+'</div></div>';
+  html += '</div>';
+  html += '<div class="form-field"><label class="form-label">Phone</label>';
+  html += '<input class="form-input" type="tel" value="'+esc(c.phone)+'" placeholder="(555) 555-5555" oninput="updateContact(\'phone\',this.value)"></div>';
+  html += '<div class="form-field"><label class="form-label">Current / Mailing Address</label>';
+  html += '<input class="form-input" value="'+esc(c.addr)+'" placeholder="123 Main St, City, State ZIP" oninput="updateContact(\'addr\',this.value)"></div>';
+  html += '<div class="form-field"><label class="form-label">Notes</label>';
+  html += '<input class="form-input" value="'+esc(c.notes)+'" placeholder="Prospecting notes..." oninput="updateContact(\'notes\',this.value)"></div>';
+  document.getElementById("client-detail-body").innerHTML = html;
 }
 
-function exportCSV(){
-  var clients=buildClients();
-  if(clients.length===0){ping("No clients to export","warn");return;}
-  var rows=[["Name","Role","Deal Address","Close Month/Year","Close Date","Current Address","Phone","Notes"]];
-  for(var i=0;i<clients.length;i++){
-    var c=clients[i];
-    var moyr="";
-    if(c.closeDate){var dt=new Date(c.closeDate+"T12:00:00");moyr=dt.toLocaleDateString("en-US",{month:"long",year:"numeric"});}
-    rows.push([
-      c.name,c.role==="Seller"?"Listing":"Buyer",c.dealAddress,moyr,fmtDate(c.closeDate),
-      getClientField(c.dealId,c.role,"Addr"),getClientField(c.dealId,c.role,"Phone"),getClientField(c.dealId,c.role,"Notes")
-    ]);
+function updateContact(field, value) {
+  if (!contacts[currentClientKey]) return;
+  contacts[currentClientKey][field] = value;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(function() {cloudSave(false);}, 1000);
+}
+
+// ---- EXPORT ----
+
+function exportCSV() {
+  var list = buildClientList();
+  if (!list.length) {ping("No clients to export", "warn"); return;}
+  var rows = [["Name","Role","Last Deal Address","Close Month/Year","Close Date","Phone","Current Address","Notes"]];
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    var moyr = "";
+    if (c.lastClose) {var dt = new Date(c.lastClose + "T12:00:00"); moyr = dt.toLocaleDateString("en-US", {month:"long",year:"numeric"});}
+    rows.push([c.name, c.role === "Seller" ? "Listing" : "Buyer", c.lastDealAddr, moyr, fmtDate(c.lastClose), c.phone, c.addr, c.notes]);
   }
-  var csv=rows.map(function(row){return row.map(function(cell){return'"'+String(cell||"").replace(/"/g,'""')+'"';}).join(",");}).join("\n");
-  document.getElementById("csv-text").value=csv;
+  var csv = rows.map(function(row) {
+    return row.map(function(cell) {return '"' + String(cell || "").replace(/"/g, '""') + '"';}).join(",");
+  }).join("\n");
+  document.getElementById("csv-text").value = csv;
   document.getElementById("csv-overlay").classList.add("open");
-  setTimeout(function(){var ta=document.getElementById("csv-text");ta.focus();ta.select();},100);
+  setTimeout(function() {var ta = document.getElementById("csv-text"); ta.focus(); ta.select();}, 100);
 }
 
-function copyCsv(){
-  var ta=document.getElementById("csv-text");ta.select();
-  try{
-    navigator.clipboard.writeText(ta.value).then(function(){ping("Copied to clipboard ✓");closeCsvModal();})
-    .catch(function(){document.execCommand("copy");ping("Copied ✓");closeCsvModal();});
-  }catch(e){document.execCommand("copy");ping("Copied!");closeCsvModal();}
+function copyCsv() {
+  var ta = document.getElementById("csv-text"); ta.select();
+  try {
+    navigator.clipboard.writeText(ta.value).then(function() {ping("Copied to clipboard"); closeCsvModal();})
+    .catch(function() {document.execCommand("copy"); ping("Copied"); closeCsvModal();});
+  } catch(e) {document.execCommand("copy"); ping("Copied!"); closeCsvModal();}
 }
 
-function closeCsvModal(){document.getElementById("csv-overlay").classList.remove("open");}
+function closeCsvModal() {document.getElementById("csv-overlay").classList.remove("open");}
 
-function calcStats(){
+// ---- STATS ----
+
+function calcStats() {
   var t=0,p=0,u=0,pi=0,v=0,r=0,uc=0,pc=0,cc=0,rc=0;
-  for(var i=0;i<deals.length;i++){
-    var d=deals[i];t+=d.comm;
-    if(d.paid)p+=d.comm;
-    if(!d.paid&&d.stage==="Closed"){u+=d.comm;uc++;}
-    if(d.stage==="Under Contract"){pi+=d.comm;pc++;}
-    if(d.stage==="Closed"){v+=d.sale;cc++;}
-    if(d.remax&&d.stage==="Closed"){r+=d.comm;rc++;}
+  for (var i = 0; i < deals.length; i++) {
+    var d = deals[i]; t += d.comm;
+    if (d.paid) p += d.comm;
+    if (!d.paid && d.stage === "Closed") {u += d.comm; uc++;}
+    if (d.stage === "Under Contract") {pi += d.comm; pc++;}
+    if (d.stage === "Closed") {v += d.sale; cc++;}
+    if (d.remax && d.stage === "Closed") {r += d.comm; rc++;}
   }
-  return{total:t,paid:p,unpaid:u,pipe:pi,volume:v,remax:r/0.65,unpaidCount:uc,pipeCount:pc,closedCount:cc,remaxCount:rc};
+  return {total:t,paid:p,unpaid:u,pipe:pi,volume:v,remax:r/0.65,unpaidCount:uc,pipeCount:pc,closedCount:cc,remaxCount:rc};
 }
 
-function tile(label,value,color,sub){
+function tile(label, value, color, sub) {
   return '<div class="tile"><div class="tile-label">'+label+'</div><div class="tile-value" style="color:'+color+'">'+value+'</div>'+(sub?'<div class="tile-sub">'+sub+'</div>':'')+'</div>';
 }
 
-function renderBoard(){
-  var st=calcStats();
-  document.getElementById("tiles").innerHTML=
-    tile("Total",$c(st.total),"#34d399","")+tile("Paid",$c(st.paid),"#60a5fa","")+
-    tile("Unpaid",$c(st.unpaid),"#f59e0b",st.unpaidCount+" deals")+
-    tile("Pipeline",$c(st.pipe),"#c084fc",st.pipeCount+" deals")+
-    tile("Closed Volume",$c(st.volume),"#fb923c",st.closedCount+" closed")+
-    tile("RE/MAX CGI",$c(st.remax),"#e879f9",st.remaxCount+" deals · comm ÷ .65");
-  var fhtml="";
-  for(var i=0;i<FILTERS.length;i++){
-    var f=FILTERS[i];var cnt=deals.filter(f.fn).length;
-    fhtml+='<button class="filter-btn'+(activeFilter===f.label?" active":"")+'" onclick="setFilter(\''+f.label+'\')">'+esc(f.label)+' ('+cnt+')</button>';
+function renderBoard() {
+  var st = calcStats();
+  document.getElementById("tiles").innerHTML =
+    tile("Total", $c(st.total), "#34d399", "") +
+    tile("Paid", $c(st.paid), "#60a5fa", "") +
+    tile("Unpaid", $c(st.unpaid), "#f59e0b", st.unpaidCount + " deals") +
+    tile("Pipeline", $c(st.pipe), "#c084fc", st.pipeCount + " deals") +
+    tile("Closed Vol", $c(st.volume), "#fb923c", st.closedCount + " closed") +
+    tile("RE/MAX CGI", $c(st.remax), "#e879f9", st.remaxCount + " deals");
+
+  var fhtml = "";
+  for (var i = 0; i < FILTERS.length; i++) {
+    var f = FILTERS[i]; var cnt = deals.filter(f.fn).length;
+    fhtml += '<button class="filter-btn'+(activeFilter===f.label?" active":"")+'" onclick="setFilter(\''+f.label+'\')">'+esc(f.label)+' ('+cnt+')</button>';
   }
-  document.getElementById("filters").innerHTML=fhtml;
-  var ff=null;
-  for(var i=0;i<FILTERS.length;i++){if(FILTERS[i].label===activeFilter){ff=FILTERS[i];break;}}
-  var visible=ff?deals.filter(ff.fn):deals;
-  if(visible.length===0){document.getElementById("deal-list").innerHTML='<div class="empty">No deals here</div>';return;}
-  var html="";
-  for(var i=0;i<visible.length;i++){
-    var deal=visible[i];var s=ST[deal.stage]||ST["Dead"];
-    var days=deal.stage==="Under Contract"?daysUntil(deal.close):null;
-    var dcolor=days===null?"":days<=7?"#f87171":days<=14?"#f59e0b":"#4b5563";
-    var dlabel=days===null?"":days>0?days+"d":days===0?"today":Math.abs(days)+"d past";
-    var parties=[deal.buyer,deal.seller].filter(Boolean).join(" · ");
-    html+='<div class="deal-card" style="border-left-color:'+s.border+'" onclick="openDetail('+deal.id+')">';
-    html+='<div class="deal-row"><div class="deal-left"><div class="deal-address">'+esc(deal.address)+'</div>';
-    html+='<div class="deal-parties">'+esc(parties)+'</div></div>';
-    html+='<div class="deal-right"><div class="deal-comm">'+$c(deal.comm)+'</div>';
-    if(days!==null)html+='<div class="deal-days" style="color:'+dcolor+'">'+dlabel+'</div>';
-    html+='</div></div><div class="deal-badges">';
-    html+=badge(deal.stage,s.txt,s.bg);
-    if(deal.myside){var mc=MYSIDE_COLORS[deal.myside];if(mc)html+=badge(deal.myside,mc.txt,mc.bg);}
-    if(!deal.paid&&deal.stage==="Closed")html+=badge("Unpaid","#fcd34d","#292010");
-    if(!deal.remax)html+=badge("Not RE/MAX","#9ca3af","#1a1a22");
-    var nc=deal.updates?deal.updates.length:0;
-    if(nc>0)html+=badge(nc+" note"+(nc>1?"s":""),"#818cf8","#1e1e30");
-    html+='</div></div>';
+  document.getElementById("filters").innerHTML = fhtml;
+
+  var ff = null;
+  for (var i = 0; i < FILTERS.length; i++) {if (FILTERS[i].label === activeFilter) {ff = FILTERS[i]; break;}}
+  var visible = ff ? deals.filter(ff.fn) : deals;
+  if (!visible.length) {document.getElementById("deal-list").innerHTML = '<div class="empty">No deals here</div>'; return;}
+
+  var html = "";
+  for (var i = 0; i < visible.length; i++) {
+    var deal = visible[i]; var s = ST[deal.stage] || ST["Dead"];
+    var days = deal.stage === "Under Contract" ? daysUntil(deal.close) : null;
+    var dcolor = days === null ? "" : days <= 7 ? "#f87171" : days <= 14 ? "#f59e0b" : "#4b5563";
+    var dlabel = days === null ? "" : days > 0 ? days+"d" : days === 0 ? "today" : Math.abs(days)+"d past";
+
+    // Build display parties line: co-agents and my clients
+    var parts = [];
+    if (deal.myside === "Buyer" || deal.myside === "Both") {
+      var myC = deal.myClientBuyer || legacyExtract(deal.buyer);
+      if (myC) parts.push("My Buyer: " + myC);
+      if (deal.coAgentSeller) parts.push("vs " + deal.coAgentSeller);
+    }
+    if (deal.myside === "Listing" || deal.myside === "Both") {
+      var myC = deal.myClientSeller || legacyExtract(deal.seller);
+      if (myC) parts.push("My Seller: " + myC);
+      if (deal.coAgentBuyer) parts.push("vs " + deal.coAgentBuyer);
+    }
+    if (!deal.myside) {
+      var p2 = [deal.buyer, deal.seller].filter(Boolean).join(" / ");
+      if (p2) parts.push(p2);
+    }
+
+    html += '<div class="deal-card" style="border-left-color:'+s.border+'" onclick="openDetail('+deal.id+')">';
+    html += '<div class="deal-row"><div class="deal-left"><div class="deal-address">'+esc(deal.address)+'</div>';
+    html += '<div class="deal-parties">'+esc(parts.join(" · "))+'</div></div>';
+    html += '<div class="deal-right"><div class="deal-comm">'+$c(deal.comm)+'</div>';
+    if (days !== null) html += '<div class="deal-days" style="color:'+dcolor+'">'+dlabel+'</div>';
+    html += '</div></div><div class="deal-badges">';
+    html += badge(deal.stage, s.txt, s.bg);
+    if (deal.myside) {var mc = MYSIDE_COLORS[deal.myside]; if (mc) html += badge(deal.myside, mc.txt, mc.bg);}
+    if (!deal.paid && deal.stage === "Closed") html += badge("Unpaid", "#fcd34d", "#292010");
+    if (!deal.remax) html += badge("Not RE/MAX", "#9ca3af", "#1a1a22");
+    var nc = deal.updates ? deal.updates.length : 0;
+    if (nc > 0) html += badge(nc+" note"+(nc>1?"s":""), "#818cf8", "#1e1e30");
+    html += '</div></div>';
   }
-  document.getElementById("deal-list").innerHTML=html;
+  document.getElementById("deal-list").innerHTML = html;
 }
 
-function setFilter(f){activeFilter=f;renderBoard();}
+function setFilter(f) {activeFilter = f; renderBoard();}
 
-function openDetail(id){currentId=id;confirmDel=false;renderDetail();show("detail");}
+// ---- DETAIL ----
 
-function renderDetail(){
-  var deal=null;
-  for(var i=0;i<deals.length;i++){if(deals[i].id===currentId){deal=deals[i];break;}}
-  if(!deal)return;
-  var s=ST[deal.stage]||ST["Dead"];
-  var days=deal.stage==="Under Contract"?daysUntil(deal.close):null;
-  var dcolor=days===null?"":days<=7?"#f87171":days<=14?"#f59e0b":"#6b7280";
-  document.getElementById("detail-title").textContent=deal.address;
-  var html='<div class="detail-top"><div>';
-  html+='<div class="detail-comm">'+$c(deal.comm)+'</div>';
-  if(deal.sale>0)html+='<div class="detail-sale">Sale price: '+$c(deal.sale)+'</div>';
-  html+='</div><div style="text-align:right">'+badge(deal.stage,s.txt,s.bg);
-  if(days!==null)html+='<div style="font-size:11px;margin-top:5px;color:'+dcolor+'">Close '+fmtDate(deal.close)+(days>0?" · "+days+"d":days===0?" · today":"")+'</div>';
-  html+='</div></div>';
-  html+='<div class="paid-row"><button style="flex:1;background:'+(deal.paid?"#14302a":"#292010")+';border:1px solid '+(deal.paid?"#059669":"#92400e")+';color:'+(deal.paid?"#6ee7b7":"#fcd34d")+';border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif" onclick="togglePaid()">'+(deal.paid?"✓ Paid":"Mark Paid")+'</button></div>';
-  html+='<div class="stage-row">';
-  var stages=["Under Contract","Closed","Dead"];
-  for(var i=0;i<stages.length;i++){
-    var sg=stages[i];var ss=ST[sg];var active=deal.stage===sg;
-    html+='<button class="stage-btn" style="background:'+(active?ss.bg:"transparent")+';border-color:'+(active?ss.border:"#1e1e2a")+';color:'+(active?ss.txt:"#374151")+'" onclick="setStage(\''+sg+'\')">'+(sg==="Under Contract"?"Contract":sg)+'</button>';
+function openDetail(id) {currentId = id; confirmDel = false; renderDetail(); show("detail");}
+
+function renderDetail() {
+  var deal = null;
+  for (var i = 0; i < deals.length; i++) {if (deals[i].id === currentId) {deal = deals[i]; break;}}
+  if (!deal) return;
+  var s = ST[deal.stage] || ST["Dead"];
+  var days = deal.stage === "Under Contract" ? daysUntil(deal.close) : null;
+  var dcolor = days === null ? "" : days <= 7 ? "#f87171" : days <= 14 ? "#f59e0b" : "#6b7280";
+  document.getElementById("detail-title").textContent = deal.address;
+
+  var html = '<div class="detail-top"><div>';
+  html += '<div class="detail-comm">'+$c(deal.comm)+'</div>';
+  if (deal.sale > 0) html += '<div class="detail-sale">Sale price: '+$c(deal.sale)+'</div>';
+  html += '</div><div style="text-align:right">'+badge(deal.stage, s.txt, s.bg);
+  if (days !== null) html += '<div style="font-size:11px;margin-top:5px;color:'+dcolor+'">Close '+fmtDate(deal.close)+(days>0?" · "+days+"d":days===0?" · today":"")+'</div>';
+  html += '</div></div>';
+
+  html += '<div class="paid-row"><button style="flex:1;background:'+(deal.paid?"#14302a":"#292010")+';border:1px solid '+(deal.paid?"#059669":"#92400e")+';color:'+(deal.paid?"#6ee7b7":"#fcd34d")+';border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif" onclick="togglePaid()">'+(deal.paid?"Paid":"Mark Paid")+'</button></div>';
+
+  html += '<div class="stage-row">';
+  var stages = ["Under Contract","Closed","Dead"];
+  for (var i = 0; i < stages.length; i++) {
+    var sg = stages[i]; var ss = ST[sg]; var active = deal.stage === sg;
+    html += '<button class="stage-btn" style="background:'+(active?ss.bg:"transparent")+';border-color:'+(active?ss.border:"#1e1e2a")+';color:'+(active?ss.txt:"#374151")+'" onclick="setStage(\''+sg+'\')">'+(sg==="Under Contract"?"Contract":sg)+'</button>';
   }
-  html+='</div>';
-  html+='<div class="section-lbl" style="margin-bottom:6px">My Side</div>';
-  html+='<div class="myside-row">';
-  for(var i=0;i<MYSIDE_OPTS.length;i++){
-    var opt=MYSIDE_OPTS[i];var mc=MYSIDE_COLORS[opt];var active=deal.myside===opt;
-    html+='<button class="myside-btn" style="background:'+(active?mc.bg:"transparent")+';border-color:'+(active?mc.border:"#1e1e2a")+';color:'+(active?mc.txt:"#374151")+'" onclick="setMySide(\''+opt+'\')">'+(active?"✓ ":"")+opt+'</button>';
+  html += '</div>';
+
+  html += '<div class="section-lbl" style="margin-bottom:6px">My Side</div>';
+  html += '<div class="myside-row">';
+  for (var i = 0; i < MYSIDE_OPTS.length; i++) {
+    var opt = MYSIDE_OPTS[i]; var mc = MYSIDE_COLORS[opt]; var active = deal.myside === opt;
+    html += '<button class="myside-btn" style="background:'+(active?mc.bg:"transparent")+';border-color:'+(active?mc.border:"#1e1e2a")+';color:'+(active?mc.txt:"#374151")+'" onclick="setMySide(\''+opt+'\')">'+(active?"✓ ":"")+opt+'</button>';
   }
-  html+='</div>';
-  var fields=[["Buyer",deal.buyer],["Seller",deal.seller],["Title",deal.title],["Close",fmtDate(deal.close)],["RE/MAX",deal.remax?"In RE/MAX stats":"Not in RE/MAX stats"]];
-  html+='<div class="fields-box">';
-  for(var i=0;i<fields.length;i++){
-    var lbl=fields[i][0],val=fields[i][1];
-    if(val&&val!=="—")html+='<div class="field-row"><div class="field-lbl">'+lbl+'</div><div class="field-val">'+esc(val)+'</div></div>';
+  html += '</div>';
+
+  // Deal fields
+  var myClientSeller = deal.myClientSeller || legacyExtract(deal.seller);
+  var myClientBuyer = deal.myClientBuyer || legacyExtract(deal.buyer);
+
+  html += '<div class="fields-box">';
+  if (deal.myside === "Listing" || deal.myside === "Both") {
+    if (myClientSeller) html += '<div class="field-row"><div class="field-lbl">My Seller</div><div class="field-val">'+esc(myClientSeller)+'</div></div>';
+    if (deal.coAgentBuyer) html += '<div class="field-row"><div class="field-lbl">Buyer Agent</div><div class="field-val">'+esc(deal.coAgentBuyer)+'</div></div>';
   }
-  html+='</div>';
-  html+='<div class="notes-wrap"><div class="section-lbl">Notes</div>';
-  html+='<div class="note-row"><input class="note-input" id="note-input" placeholder="Add a note…" onkeydown="if(event.key===\'Enter\')saveNote()">';
-  html+='<button class="btn-red" onclick="saveNote()">Save</button></div>';
-  var updates=deal.updates||[];
-  if(updates.length===0)html+='<div class="no-notes">No notes</div>';
-  for(var i=0;i<updates.length;i++){
-    var u=updates[i];
-    html+='<div class="note-card"><div class="note-text">'+esc(u.text)+'</div><div class="note-ts">'+new Date(u.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"2-digit",hour:"numeric",minute:"2-digit"})+'</div></div>';
+  if (deal.myside === "Buyer" || deal.myside === "Both") {
+    if (myClientBuyer) html += '<div class="field-row"><div class="field-lbl">My Buyer</div><div class="field-val">'+esc(myClientBuyer)+'</div></div>';
+    if (deal.coAgentSeller) html += '<div class="field-row"><div class="field-lbl">Seller Agent</div><div class="field-val">'+esc(deal.coAgentSeller)+'</div></div>';
   }
-  html+='</div>';
-  if(confirmDel){
-    html+='<div class="confirm-row"><button class="btn-cancel" onclick="confirmDel=false;renderDetail()">Cancel</button><button class="btn-confirm-del" onclick="deleteDeal()">Confirm Delete</button></div>';
+  if (!deal.myside) {
+    if (deal.buyer) html += '<div class="field-row"><div class="field-lbl">Buyer</div><div class="field-val">'+esc(deal.buyer)+'</div></div>';
+    if (deal.seller) html += '<div class="field-row"><div class="field-lbl">Seller</div><div class="field-val">'+esc(deal.seller)+'</div></div>';
+  }
+  if (deal.title) html += '<div class="field-row"><div class="field-lbl">Title</div><div class="field-val">'+esc(deal.title)+'</div></div>';
+  html += '<div class="field-row"><div class="field-lbl">Close</div><div class="field-val">'+fmtDate(deal.close)+'</div></div>';
+  html += '<div class="field-row"><div class="field-lbl">RE/MAX</div><div class="field-val">'+(deal.remax?"In RE/MAX stats":"Not in RE/MAX stats")+'</div></div>';
+  html += '</div>';
+
+  html += '<div class="notes-wrap"><div class="section-lbl">Notes</div>';
+  html += '<div class="note-row"><input class="note-input" id="note-input" placeholder="Add a note..." onkeydown="if(event.key===\'Enter\')saveNote()">';
+  html += '<button class="btn-red" onclick="saveNote()">Save</button></div>';
+  var updates = deal.updates || [];
+  if (!updates.length) html += '<div class="no-notes">No notes</div>';
+  for (var i = 0; i < updates.length; i++) {
+    var u = updates[i];
+    html += '<div class="note-card"><div class="note-text">'+esc(u.text)+'</div><div class="note-ts">'+new Date(u.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"2-digit",hour:"numeric",minute:"2-digit"})+'</div></div>';
+  }
+  html += '</div>';
+
+  if (confirmDel) {
+    html += '<div class="confirm-row"><button class="btn-cancel" onclick="confirmDel=false;renderDetail()">Cancel</button><button class="btn-confirm-del" onclick="deleteDeal()">Confirm Delete</button></div>';
   } else {
-    html+='<button class="btn-delete" onclick="confirmDel=true;renderDetail()">Delete Deal</button>';
+    html += '<button class="btn-delete" onclick="confirmDel=true;renderDetail()">Delete Deal</button>';
   }
-  document.getElementById("detail-body").innerHTML=html;
+  document.getElementById("detail-body").innerHTML = html;
 }
 
-function setMySide(opt){
-  var next=[];
-  for(var i=0;i<deals.length;i++){
-    if(deals[i].id===currentId){var d=Object.assign({},deals[i]);d.myside=(d.myside===opt?"":opt);next.push(d);}
+function setMySide(opt) {
+  var next = [];
+  for (var i = 0; i < deals.length; i++) {
+    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.myside = (d.myside === opt ? "" : opt); next.push(d);}
     else next.push(deals[i]);
   }
-  persist(next,true);renderDetail();
+  persist(next, true); renderDetail();
 }
 
-function togglePaid(){
-  var next=[];
-  for(var i=0;i<deals.length;i++){
-    if(deals[i].id===currentId){var d=Object.assign({},deals[i]);d.paid=!d.paid;next.push(d);}
+function togglePaid() {
+  var next = [];
+  for (var i = 0; i < deals.length; i++) {
+    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.paid = !d.paid; next.push(d);}
     else next.push(deals[i]);
   }
   persist(next);
-  ping(next.filter(function(d){return d.id===currentId;})[0].paid?"Marked paid ✓":"Marked unpaid");
+  ping(next.filter(function(d) {return d.id === currentId;})[0].paid ? "Marked paid" : "Marked unpaid");
   renderDetail();
 }
 
-function setStage(stage){
-  var next=[];
-  for(var i=0;i<deals.length;i++){
-    if(deals[i].id===currentId){var d=Object.assign({},deals[i]);d.stage=stage;next.push(d);}
+function setStage(stage) {
+  var next = [];
+  for (var i = 0; i < deals.length; i++) {
+    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.stage = stage; next.push(d);}
     else next.push(deals[i]);
   }
-  persist(next);ping("Moved to "+stage);renderDetail();
+  persist(next); ping("Moved to " + stage); renderDetail();
 }
 
-function saveNote(){
-  var input=document.getElementById("note-input");
-  var text=input.value.trim();if(!text)return;
-  var entry={ts:new Date().toISOString(),text:text};
-  var next=[];
-  for(var i=0;i<deals.length;i++){
-    if(deals[i].id===currentId){
-      var d=Object.assign({},deals[i]);d.updates=[entry].concat(d.updates||[]);next.push(d);
+function saveNote() {
+  var input = document.getElementById("note-input");
+  var text = input.value.trim(); if (!text) return;
+  var entry = {ts: new Date().toISOString(), text: text};
+  var next = [];
+  for (var i = 0; i < deals.length; i++) {
+    if (deals[i].id === currentId) {
+      var d = Object.assign({}, deals[i]); d.updates = [entry].concat(d.updates || []); next.push(d);
     } else next.push(deals[i]);
   }
-  persist(next);ping("Note saved ✓");renderDetail();
+  persist(next); ping("Note saved"); renderDetail();
 }
 
-function deleteDeal(){
-  var next=deals.filter(function(d){return d.id!==currentId;});
-  persist(next);ping("Deleted");showBoard();
+function deleteDeal() {
+  var next = deals.filter(function(d) {return d.id !== currentId;});
+  persist(next); ping("Deleted"); showBoard();
 }
 
-function openAdd(){
-  formMode="add";
-  formData={address:"",buyer:"",seller:"",title:"",sale:"",comm:"",stage:"Under Contract",close:"",paid:false,remax:false,myside:"",clientPhone:"",clientAddr:""};
-  document.getElementById("form-title-label").textContent="New Deal";
-  renderForm();show("form");
+// ---- FORM ----
+
+function openAdd() {
+  formMode = "add";
+  formData = {address:"",myClientSeller:"",myClientBuyer:"",coAgentBuyer:"",coAgentSeller:"",title:"",sale:"",comm:"",stage:"Under Contract",close:"",paid:false,remax:false,myside:""};
+  document.getElementById("form-title-label").textContent = "New Deal";
+  renderForm(); show("form");
 }
 
-function openEdit(){
-  formMode="edit";
-  for(var i=0;i<deals.length;i++){if(deals[i].id===currentId){formData=Object.assign({},deals[i]);break;}}
-  document.getElementById("form-title-label").textContent="Edit Deal";
-  renderForm();show("form");
+function openEdit() {
+  formMode = "edit";
+  for (var i = 0; i < deals.length; i++) {if (deals[i].id === currentId) {formData = Object.assign({}, deals[i]); break;}}
+  // Migrate legacy fields
+  if (!formData.myClientSeller && formData.seller) formData.myClientSeller = legacyExtract(formData.seller);
+  if (!formData.myClientBuyer && formData.buyer) formData.myClientBuyer = legacyExtract(formData.buyer);
+  document.getElementById("form-title-label").textContent = "Edit Deal";
+  renderForm(); show("form");
 }
 
-function formBack(){show(formMode==="add"?"board":"detail");}
+function formBack() {show(formMode === "add" ? "board" : "detail");}
 
-function renderForm(){
-  var f=formData;
-  var html=ff("Property Address","address","text","123 Main St, City")+
-    ff("Buyer","buyer","text","Agent - Client Name")+
-    ff("Seller","seller","text","Agent - Seller Name")+
-    ff("Title Co","title","text","Title Company")+
-    ff("Sale Price","sale","number","0")+
-    ff("Net Commission (65/35)","comm","number","0.00")+
-    ff("Close Date","close","date","");
+function renderForm() {
+  var f = formData;
+  var html = ff("Property Address", "address", "text", "123 Main St, City");
 
-  html+='<div class="form-field"><label class="form-label">Stage</label><div class="stage-row">';
-  var stages=["Under Contract","Closed","Dead"];
-  for(var i=0;i<stages.length;i++){
-    var sg=stages[i];var ss=ST[sg];var active=f.stage===sg;
-    html+='<button class="stage-btn" style="background:'+(active?ss.bg:"transparent")+';border-color:'+(active?ss.border:"#1e1e2a")+';color:'+(active?ss.txt:"#374151")+'" onclick="setFormStage(\''+sg+'\')">'+(sg==="Under Contract"?"Contract":sg)+'</button>';
+  html += '<div class="form-field"><label class="form-label">Stage</label><div class="stage-row">';
+  var stages = ["Under Contract","Closed","Dead"];
+  for (var i = 0; i < stages.length; i++) {
+    var sg = stages[i]; var ss = ST[sg]; var active = f.stage === sg;
+    html += '<button class="stage-btn" style="background:'+(active?ss.bg:"transparent")+';border-color:'+(active?ss.border:"#1e1e2a")+';color:'+(active?ss.txt:"#374151")+'" onclick="setFormStage(\''+sg+'\')">'+(sg==="Under Contract"?"Contract":sg)+'</button>';
   }
-  html+='</div></div>';
+  html += '</div></div>';
 
-  html+='<div class="form-field"><label class="form-label">My Side</label><div class="myside-row">';
-  for(var i=0;i<MYSIDE_OPTS.length;i++){
-    var opt=MYSIDE_OPTS[i];var mc=MYSIDE_COLORS[opt];var active=f.myside===opt;
-    html+='<button class="myside-btn" style="background:'+(active?mc.bg:"transparent")+';border-color:'+(active?mc.border:"#1e1e2a")+';color:'+(active?mc.txt:"#374151")+'" onclick="setFormMySide(\''+opt+'\')">'+(active?"✓ ":"")+opt+'</button>';
+  html += '<div class="form-field"><label class="form-label">My Side</label><div class="myside-row">';
+  for (var i = 0; i < MYSIDE_OPTS.length; i++) {
+    var opt = MYSIDE_OPTS[i]; var mc = MYSIDE_COLORS[opt]; var active = f.myside === opt;
+    html += '<button class="myside-btn" style="background:'+(active?mc.bg:"transparent")+';border-color:'+(active?mc.border:"#1e1e2a")+';color:'+(active?mc.txt:"#374151")+'" onclick="setFormMySide(\''+opt+'\')">'+(active?"✓ ":"")+opt+'</button>';
   }
-  html+='</div></div>';
+  html += '</div></div>';
 
-  if(f.myside){
-    html+='<div style="background:#16161f;border:1px solid #2a2535;border-radius:10px;padding:12px 14px;margin-bottom:11px">';
-    html+='<div style="font-size:10px;font-weight:700;color:#7c3aed;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px">My Client Info</div>';
-    html+=ff("Client Phone","clientPhone","tel","(555) 555-5555");
-    html+=ff("Client Current / Mailing Address","clientAddr","text","123 Main St, City, State ZIP");
-    html+='</div>';
-  }
-
-  html+='<div class="toggle-row">';
-  html+='<button class="toggle-btn" style="background:'+(f.paid?"#14302a":"transparent")+';border-color:'+(f.paid?"#059669":"#1e1e2a")+';color:'+(f.paid?"#6ee7b7":"#374151")+'" onclick="toggleForm(\'paid\')">'+(f.paid?"✓ ":"")+'Paid</button>';
-  html+='<button class="toggle-btn" style="background:'+(f.remax?"#14302a":"transparent")+';border-color:'+(f.remax?"#059669":"#1e1e2a")+';color:'+(f.remax?"#6ee7b7":"#374151")+'" onclick="toggleForm(\'remax\')">'+(f.remax?"✓ ":"")+'In RE/MAX</button>';
-  html+='</div>';
-
-  html+='<button class="btn-full" onclick="saveDeal()">'+(formMode==="add"?"Save Deal":"Update Deal")+'</button>';
-  document.getElementById("form-body").innerHTML=html;
-
-  var keys=["address","buyer","seller","title","sale","comm","close","clientPhone","clientAddr"];
-  for(var i=0;i<keys.length;i++){
-    var el=document.getElementById("ff-"+keys[i]);
-    if(el)el.value=formData[keys[i]]||"";
-  }
-}
-
-function ff(label,key,type,placeholder){
-  return '<div class="form-field"><label class="form-label">'+label+'</label><input id="ff-'+key+'" class="form-input" type="'+type+'" placeholder="'+esc(placeholder)+'" oninput="formData[\''+key+'\']=this.value"></div>';
-}
-
-function setFormStage(sg){formData.stage=sg;renderForm();}
-function setFormMySide(opt){formData.myside=(formData.myside===opt?"":opt);renderForm();}
-function toggleForm(k){formData[k]=!formData[k];renderForm();}
-
-function saveDeal(){
-  var d=Object.assign({},formData);
-  d.sale=parseFloat(d.sale)||0;
-  d.comm=parseFloat(d.comm)||0;
-  if(d.myside&&(d.clientPhone||d.clientAddr)){
-    var roles=[];
-    if(d.myside==="Listing"||d.myside==="Both")roles.push("Seller");
-    if(d.myside==="Buyer"||d.myside==="Both")roles.push("Buyer");
-    for(var r=0;r<roles.length;r++){
-      var role=roles[r];
-      if(!d["clientPhone_"])d["clientPhone_"]={};
-      if(!d["clientAddr_"])d["clientAddr_"]={};
-      if(d.clientPhone)d["clientPhone_"][role]=d.clientPhone;
-      if(d.clientAddr)d["clientAddr_"][role]=d.clientAddr;
+  // Listing side
+  if (f.myside === "Listing" || f.myside === "Both") {
+    html += '<div class="client-section">';
+    html += '<div class="client-section-label">'+(f.myside==="Both"?"Listing Side":"My Client")+'</div>';
+    html += ff("My Seller Client", "myClientSeller", "text", "First and Last Name");
+    html += ff("Buyer Agent (other side)", "coAgentBuyer", "text", "Agent name");
+    // Phone auto-fill hint
+    var sellerKey = normalizeKey(f.myClientSeller || "");
+    if (sellerKey && contacts[sellerKey] && contacts[sellerKey].phone) {
+      html += '<div style="font-size:10px;color:#34d399;margin-top:-6px;margin-bottom:10px">Phone on file: '+esc(contacts[sellerKey].phone)+'</div>';
     }
+    html += '</div>';
   }
-  delete d.clientPhone;delete d.clientAddr;
-  if(formMode==="add"){
-    d.id=Date.now();d.updates=[];
-    persist(deals.concat([d]));ping("Deal added ✓");showBoard();
+
+  // Buyer side
+  if (f.myside === "Buyer" || f.myside === "Both") {
+    html += '<div class="client-section">';
+    html += '<div class="client-section-label">'+(f.myside==="Both"?"Buyer Side":"My Client")+'</div>';
+    html += ff("My Buyer Client", "myClientBuyer", "text", "First and Last Name");
+    html += ff("Seller Agent (other side)", "coAgentSeller", "text", "Agent name");
+    var buyerKey = normalizeKey(f.myClientBuyer || "");
+    if (buyerKey && contacts[buyerKey] && contacts[buyerKey].phone) {
+      html += '<div style="font-size:10px;color:#34d399;margin-top:-6px;margin-bottom:10px">Phone on file: '+esc(contacts[buyerKey].phone)+'</div>';
+    }
+    html += '</div>';
+  }
+
+  html += ff("Title Co", "title", "text", "Title Company");
+  html += ff("Sale Price", "sale", "number", "0");
+  html += ff("Net Commission (65/35)", "comm", "number", "0.00");
+  html += ff("Close Date", "close", "date", "");
+
+  html += '<div class="toggle-row">';
+  html += '<button class="toggle-btn" style="background:'+(f.paid?"#14302a":"transparent")+';border-color:'+(f.paid?"#059669":"#1e1e2a")+';color:'+(f.paid?"#6ee7b7":"#374151")+'" onclick="toggleForm(\'paid\')">'+(f.paid?"Paid":"Paid")+'</button>';
+  html += '<button class="toggle-btn" style="background:'+(f.remax?"#14302a":"transparent")+';border-color:'+(f.remax?"#059669":"#1e1e2a")+';color:'+(f.remax?"#6ee7b7":"#374151")+'" onclick="toggleForm(\'remax\')">'+(f.remax?"In RE/MAX":"In RE/MAX")+'</button>';
+  html += '</div>';
+
+  html += '<button class="btn-full" onclick="saveDeal()">'+(formMode==="add"?"Save Deal":"Update Deal")+'</button>';
+  document.getElementById("form-body").innerHTML = html;
+
+  var keys = ["address","myClientSeller","myClientBuyer","coAgentBuyer","coAgentSeller","title","sale","comm","close"];
+  for (var i = 0; i < keys.length; i++) {
+    var el = document.getElementById("ff-"+keys[i]);
+    if (el) el.value = formData[keys[i]] || "";
+  }
+}
+
+function ff(label, key, type, placeholder) {
+  return '<div class="form-field"><label class="form-label">'+label+'</label><input id="ff-'+key+'" class="form-input" type="'+type+'" placeholder="'+esc(placeholder)+'" oninput="formData[\''+key+'\']=this.value;onFormInput(\''+key+'\')"></div>';
+}
+
+function onFormInput(key) {
+  // Re-render form if client name changed to show/hide phone-on-file hint
+  if (key === "myClientSeller" || key === "myClientBuyer") renderForm();
+}
+
+function setFormStage(sg) {formData.stage = sg; renderForm();}
+function setFormMySide(opt) {formData.myside = (formData.myside === opt ? "" : opt); renderForm();}
+function toggleForm(k) {formData[k] = !formData[k]; renderForm();}
+
+function saveDeal() {
+  var d = Object.assign({}, formData);
+  d.sale = parseFloat(d.sale) || 0;
+  d.comm = parseFloat(d.comm) || 0;
+
+  // Auto-pull phone from existing contact if available
+  if (d.myClientSeller) {
+    var k = normalizeKey(d.myClientSeller);
+    if (contacts[k] && contacts[k].phone && !d.sellerPhone) d.sellerPhoneOnFile = contacts[k].phone;
+  }
+  if (d.myClientBuyer) {
+    var k = normalizeKey(d.myClientBuyer);
+    if (contacts[k] && contacts[k].phone && !d.buyerPhone) d.buyerPhoneOnFile = contacts[k].phone;
+  }
+
+  if (formMode === "add") {
+    d.id = Date.now(); d.updates = [];
+    persist(deals.concat([d])); ping("Deal added"); showBoard();
   } else {
-    var next=[];
-    for(var i=0;i<deals.length;i++){next.push(deals[i].id===d.id?d:deals[i]);}
-    persist(next);ping("Saved ✓");show("detail");renderDetail();
+    var next = [];
+    for (var i = 0; i < deals.length; i++) {next.push(deals[i].id === d.id ? d : deals[i]);}
+    persist(next); ping("Saved"); show("detail"); renderDetail();
   }
 }
 
-function show(screen){
-  var all=document.querySelectorAll(".screen");
-  for(var i=0;i<all.length;i++)all[i].classList.remove("active");
+function show(screen) {
+  var all = document.querySelectorAll(".screen");
+  for (var i = 0; i < all.length; i++) all[i].classList.remove("active");
   document.getElementById("screen-"+screen).classList.add("active");
-  window.scrollTo(0,0);
+  window.scrollTo(0, 0);
 }
 
-function showBoard(){
-  show("board");renderBoard();
-  if(activeTab==="clients")renderClients();
+function showBoard() {
+  show("board"); renderBoard();
+  if (activeTab === "clients") renderClients();
 }
 
 var toastTimer;
-function ping(msg,type){
-  var t=document.getElementById("toast");
-  var warn=type==="warn";
-  t.style.background=warn?"#292010":"#14302a";
-  t.style.border="1px solid "+(warn?"#92400e":"#059669");
-  t.style.color=warn?"#fcd34d":"#6ee7b7";
-  t.textContent=msg;t.style.display="block";
+function ping(msg, type) {
+  var t = document.getElementById("toast");
+  var warn = type === "warn";
+  t.style.background = warn ? "#292010" : "#14302a";
+  t.style.border = "1px solid " + (warn ? "#92400e" : "#059669");
+  t.style.color = warn ? "#fcd34d" : "#6ee7b7";
+  t.textContent = msg; t.style.display = "block";
   clearTimeout(toastTimer);
-  toastTimer=setTimeout(function(){t.style.display="none";},2600);
+  toastTimer = setTimeout(function() {t.style.display = "none";}, 2600);
 }
 
-cloudLoad(function(){renderBoard();});
+function normalizeKey(name) {
+  if (!name) return "";
+  return name.toLowerCase()
+    .replace(/\s*&\s*/g, " ")
+    .replace(/\s+and\s+/g, " ")
+    .replace(/[^a-z0-9 ]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+cloudLoad(function() {renderBoard();});
 </script>
 </body>
 </html>
