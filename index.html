@@ -592,16 +592,16 @@ function renderDetail() {
   html += '<div class="fields-box">';
   if (deal.myside === "Listing" || deal.myside === "Both") {
     if (myClientSeller) html += '<div class="field-row"><div class="field-lbl">My Seller</div><div class="field-val">'+esc(myClientSeller)+'</div></div>';
-    if (deal.coAgentBuyer) html += '<div class="field-row"><div class="field-lbl">Buyer Agent</div><div class="field-val">'+esc(deal.coAgentBuyer)+'</div></div>';
   }
   if (deal.myside === "Buyer" || deal.myside === "Both") {
     if (myClientBuyer) html += '<div class="field-row"><div class="field-lbl">My Buyer</div><div class="field-val">'+esc(myClientBuyer)+'</div></div>';
-    if (deal.coAgentSeller) html += '<div class="field-row"><div class="field-lbl">Seller Agent</div><div class="field-val">'+esc(deal.coAgentSeller)+'</div></div>';
   }
   if (!deal.myside) {
     if (deal.buyer) html += '<div class="field-row"><div class="field-lbl">Buyer</div><div class="field-val">'+esc(deal.buyer)+'</div></div>';
     if (deal.seller) html += '<div class="field-row"><div class="field-lbl">Seller</div><div class="field-val">'+esc(deal.seller)+'</div></div>';
   }
+  if (deal.coAgentBuyer) html += '<div class="field-row"><div class="field-lbl">Buyer Agent</div><div class="field-val">'+esc(deal.coAgentBuyer)+'</div></div>';
+  if (deal.coAgentSeller) html += '<div class="field-row"><div class="field-lbl">Seller Agent</div><div class="field-val">'+esc(deal.coAgentSeller)+'</div></div>';
   if (deal.title) html += '<div class="field-row"><div class="field-lbl">Title</div><div class="field-val">'+esc(deal.title)+'</div></div>';
   html += '<div class="field-row"><div class="field-lbl">Close</div><div class="field-val">'+fmtDate(deal.close)+'</div></div>';
   html += '<div class="field-row"><div class="field-lbl">RE/MAX</div><div class="field-val">'+(deal.remax?"In RE/MAX stats":"Not in RE/MAX stats")+'</div></div>';
@@ -713,33 +713,43 @@ function renderForm() {
   }
   html += '</div></div>';
 
-  // Listing side
+  // Listing side -- client info
   if (f.myside === "Listing" || f.myside === "Both") {
     html += '<div class="client-section">';
-    html += '<div class="client-section-label">'+(f.myside==="Both"?"Listing Side":"My Client")+'</div>';
-    html += ff("My Seller Client", "myClientSeller", "text", "First and Last Name");
-    html += ff("Buyer Agent (other side)", "coAgentBuyer", "text", "Agent name");
-    // Phone auto-fill hint
+    html += '<div class="client-section-label">'+(f.myside==="Both"?"My Seller":"My Client")+'</div>';
+    html += ff("Client Name", "myClientSeller", "text", "First and Last Name");
     var sellerKey = normalizeKey(f.myClientSeller || "");
-    if (sellerKey && contacts[sellerKey] && contacts[sellerKey].phone) {
-      html += '<div style="font-size:10px;color:#34d399;margin-top:-6px;margin-bottom:10px">Phone on file: '+esc(contacts[sellerKey].phone)+'</div>';
+    var sellerContact = contacts[sellerKey] || {};
+    if (sellerKey && sellerContact.phone) {
+      html += '<div style="font-size:10px;color:#34d399;margin-top:-6px;margin-bottom:10px">Phone on file: '+esc(sellerContact.phone)+'</div>';
+      html += ff("Current Mailing Address", "mySellerAddr", "text", "123 Main St, City, State ZIP");
+    } else {
+      html += ff("Phone", "mySellerPhone", "tel", "(555) 555-5555");
+      html += ff("Current Mailing Address", "mySellerAddr", "text", "123 Main St, City, State ZIP");
     }
     html += '</div>';
   }
 
-  // Buyer side
+  // Buyer side -- client info
   if (f.myside === "Buyer" || f.myside === "Both") {
     html += '<div class="client-section">';
-    html += '<div class="client-section-label">'+(f.myside==="Both"?"Buyer Side":"My Client")+'</div>';
-    html += ff("My Buyer Client", "myClientBuyer", "text", "First and Last Name");
-    html += ff("Seller Agent (other side)", "coAgentSeller", "text", "Agent name");
+    html += '<div class="client-section-label">'+(f.myside==="Both"?"My Buyer":"My Client")+'</div>';
+    html += ff("Client Name", "myClientBuyer", "text", "First and Last Name");
     var buyerKey = normalizeKey(f.myClientBuyer || "");
-    if (buyerKey && contacts[buyerKey] && contacts[buyerKey].phone) {
-      html += '<div style="font-size:10px;color:#34d399;margin-top:-6px;margin-bottom:10px">Phone on file: '+esc(contacts[buyerKey].phone)+'</div>';
+    var buyerContact = contacts[buyerKey] || {};
+    if (buyerKey && buyerContact.phone) {
+      html += '<div style="font-size:10px;color:#34d399;margin-top:-6px;margin-bottom:10px">Phone on file: '+esc(buyerContact.phone)+'</div>';
+      html += ff("Current Mailing Address", "myBuyerAddr", "text", "123 Main St, City, State ZIP");
+    } else {
+      html += ff("Phone", "myBuyerPhone", "tel", "(555) 555-5555");
+      html += ff("Current Mailing Address", "myBuyerAddr", "text", "123 Main St, City, State ZIP");
     }
     html += '</div>';
   }
 
+  // Deal details -- co-agent and transaction info
+  html += ff("Buyer Agent", "coAgentBuyer", "text", "Other agent name (buyer side)");
+  html += ff("Seller Agent", "coAgentSeller", "text", "Other agent name (seller side)");
   html += ff("Title Co", "title", "text", "Title Company");
   html += ff("Sale Price", "sale", "number", "0");
   html += ff("Net Commission (65/35)", "comm", "number", "0.00");
@@ -753,7 +763,7 @@ function renderForm() {
   html += '<button class="btn-full" onclick="saveDeal()">'+(formMode==="add"?"Save Deal":"Update Deal")+'</button>';
   document.getElementById("form-body").innerHTML = html;
 
-  var keys = ["address","myClientSeller","myClientBuyer","coAgentBuyer","coAgentSeller","title","sale","comm","close"];
+  var keys = ["address","myClientSeller","myClientBuyer","mySellerPhone","myBuyerPhone","mySellerAddr","myBuyerAddr","coAgentBuyer","coAgentSeller","title","sale","comm","close"];
   for (var i = 0; i < keys.length; i++) {
     var el = document.getElementById("ff-"+keys[i]);
     if (el) el.value = formData[keys[i]] || "";
@@ -778,14 +788,28 @@ function saveDeal() {
   d.sale = parseFloat(d.sale) || 0;
   d.comm = parseFloat(d.comm) || 0;
 
-  // Auto-pull phone from existing contact if available
+  // Save client phone and address into contacts, most recent deal wins for address
   if (d.myClientSeller) {
     var k = normalizeKey(d.myClientSeller);
-    if (contacts[k] && contacts[k].phone && !d.sellerPhone) d.sellerPhoneOnFile = contacts[k].phone;
+    if (!contacts[k]) contacts[k] = {name:d.myClientSeller, role:"Seller", phone:"", addr:"", notes:"", lastDealId:d.id, lastDealAddr:d.address, lastClose:d.close};
+    if (d.mySellerPhone) contacts[k].phone = d.mySellerPhone;
+    if (d.mySellerAddr) contacts[k].addr = d.mySellerAddr;
+    contacts[k].lastDealId = d.id;
+    contacts[k].lastDealAddr = d.address;
+    contacts[k].lastClose = d.close;
+    contacts[k].name = d.myClientSeller;
+    contacts[k].role = "Seller";
   }
   if (d.myClientBuyer) {
     var k = normalizeKey(d.myClientBuyer);
-    if (contacts[k] && contacts[k].phone && !d.buyerPhone) d.buyerPhoneOnFile = contacts[k].phone;
+    if (!contacts[k]) contacts[k] = {name:d.myClientBuyer, role:"Buyer", phone:"", addr:"", notes:"", lastDealId:d.id, lastDealAddr:d.address, lastClose:d.close};
+    if (d.myBuyerPhone) contacts[k].phone = d.myBuyerPhone;
+    if (d.myBuyerAddr) contacts[k].addr = d.myBuyerAddr;
+    contacts[k].lastDealId = d.id;
+    contacts[k].lastDealAddr = d.address;
+    contacts[k].lastClose = d.close;
+    contacts[k].name = d.myClientBuyer;
+    contacts[k].role = "Buyer";
   }
 
   if (formMode === "add") {
