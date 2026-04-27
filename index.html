@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -73,6 +74,8 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 .form-input:focus{outline:none;border-color:#3a3a58}
 .toggle-row{display:flex;gap:8px;margin-bottom:20px}
 .toggle-btn{flex:1;border-radius:8px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;font-family:Georgia,serif;border:1px solid}
+.split-row{display:flex;gap:6px;margin-bottom:14px}
+.split-btn{flex:1;border-radius:8px;padding:8px 4px;font-size:11px;font-weight:700;cursor:pointer;font-family:Georgia,serif;border:1px solid;text-align:center}
 #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);border-radius:10px;padding:9px 18px;font-size:13px;font-weight:600;white-space:nowrap;z-index:9999;pointer-events:none;font-family:Georgia,serif;box-shadow:0 4px 24px rgba(0,0,0,0.6);display:none}
 .btn-back{background:none;border:none;color:#6b7280;cursor:pointer;font-size:22px;line-height:1;padding:0 4px 0 0;font-family:Georgia,serif}
 .btn-edit{background:#1e1e2a;border:1px solid #2a2a38;color:#9ca3af;border-radius:7px;padding:6px 12px;font-size:11px;cursor:pointer;font-family:Georgia,serif}
@@ -114,7 +117,7 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
         <div class="brand-icon">R</div>
         <div>
           <div class="brand-name">Deal Tracker</div>
-          <div class="brand-sub">RE/MAX · 65/35 split</div>
+          <div class="brand-sub" id="brand-sub">RE/MAX · Split Plans</div>
         </div>
       </div>
       <div class="header-actions">
@@ -181,12 +184,12 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 </div>
 
 <script>
-var BIN_ID  = "69c57d8caa77b81da92222fc";
+var BIN_ID  = "69c5b0c7aa77b81da922e7cc";
 var API_KEY = "$2a$10$Jw0jOjJ3zC3xcmklD3sn3eSgHfvGo84McIjbNTWZlY3ElL3ImTemW";
 var BIN_URL = "https://api.jsonbin.io/v3/b/" + BIN_ID;
 
 var deals = [];
-var contacts = {}; // keyed by normalized name: {phone, addr, notes, lastDealId, lastClose}
+var contacts = {};
 var activeFilter = "All";
 var activeTab = "deals";
 var currentId = null;
@@ -195,6 +198,23 @@ var formMode = "add";
 var formData = {};
 var confirmDel = false;
 var saveTimer = null;
+
+// Split plan config
+var SPLIT_PLANS = {
+  "65/35": { divisor: 0.65, label: "65/35", color: "#fb923c", bg: "#2a1a0a" },
+  "95/5":  { divisor: 0.95, label: "95/5",  color: "#34d399", bg: "#0a2a1a" }
+};
+
+function getSplitPlan(deal) {
+  return deal.splitPlan || "65/35";
+}
+
+function getCGI(deal) {
+  if (!deal.comm || !deal.remax || deal.stage !== "Closed") return 0;
+  var plan = getSplitPlan(deal);
+  var divisor = SPLIT_PLANS[plan] ? SPLIT_PLANS[plan].divisor : 0.65;
+  return deal.comm / divisor;
+}
 
 var ST = {
   "Under Contract":{border:"#2563eb",bg:"#1e3a5f",txt:"#93c5fd"},
@@ -219,7 +239,6 @@ var FILTERS = [
 
 // ---- NAME HELPERS ----
 
-// Parse legacy "Pat - Client Name" or "Agent - Client Name" format, return client name only
 function legacyExtract(str) {
   if (!str) return "";
   str = str.trim();
@@ -227,9 +246,6 @@ function legacyExtract(str) {
   return idx > -1 ? str.substring(idx + 3).trim() : str;
 }
 
-// Normalize a client name to a unique key
-// "Karl and Judy Bates" -> "karl-judy-bates"
-// "Karl & Judy Bates" -> "karl-judy-bates"
 function normalizeKey(name) {
   if (!name) return "";
   return name.toLowerCase()
@@ -240,11 +256,9 @@ function normalizeKey(name) {
     .replace(/\s+/g, "-");
 }
 
-// Get all client entries from a deal {key, name, role}
 function getDealClients(deal) {
   var clients = [];
   if (!deal.myside) return clients;
-
   if (deal.myside === "Listing" || deal.myside === "Both") {
     var name = deal.myClientSeller || legacyExtract(deal.seller);
     if (name) clients.push({key: normalizeKey(name), name: name, role: "Seller"});
@@ -265,6 +279,11 @@ function cloudLoad(callback) {
   .then(function(data) {
     deals = (data && Array.isArray(data.deals) && data.deals.length > 0) ? data.deals : [];
     contacts = (data && data.contacts) ? data.contacts : {};
+    // Migrate: default splitPlan to 65/35 for any deal missing it
+    deals = deals.map(function(d) {
+      if (!d.splitPlan) d.splitPlan = "65/35";
+      return d;
+    });
     setSaveStatus("saved");
     callback();
   })
@@ -274,6 +293,7 @@ function cloudLoad(callback) {
       var parsed = raw ? JSON.parse(raw) : {};
       deals = parsed.deals || [];
       contacts = parsed.contacts || {};
+      deals = deals.map(function(d) {if (!d.splitPlan) d.splitPlan = "65/35"; return d;});
     } catch(e) {deals = []; contacts = {};}
     setSaveStatus("saved");
     ping("Loaded offline copy", "warn");
@@ -309,17 +329,12 @@ function persist(nextDeals, silent) {
 
 // ---- CONTACTS ----
 
-// Rebuild contacts index from all deals, preserving manually entered phone/addr/notes
 function rebuildContacts() {
   var newContacts = {};
-
-  // Sort deals by close date so most recent wins
   var sorted = deals.slice().sort(function(a, b) {
-    var da = a.close || "";
-    var db = b.close || "";
+    var da = a.close || ""; var db = b.close || "";
     return da > db ? 1 : da < db ? -1 : 0;
   });
-
   for (var i = 0; i < sorted.length; i++) {
     var deal = sorted[i];
     var clients = getDealClients(deal);
@@ -328,14 +343,9 @@ function rebuildContacts() {
       if (!c.key) continue;
       var existing = newContacts[c.key] || contacts[c.key] || {};
       newContacts[c.key] = {
-        name: c.name,
-        role: c.role,
-        phone: existing.phone || "",
-        addr: existing.addr || "",
-        notes: existing.notes || "",
-        lastDealId: deal.id,
-        lastDealAddr: deal.address,
-        lastClose: deal.close
+        name: c.name, role: c.role,
+        phone: existing.phone || "", addr: existing.addr || "", notes: existing.notes || "",
+        lastDealId: deal.id, lastDealAddr: deal.address, lastClose: deal.close
       };
     }
   }
@@ -344,9 +354,7 @@ function rebuildContacts() {
 
 function buildClientList() {
   var list = [];
-  for (var k in contacts) {
-    list.push(Object.assign({key: k}, contacts[k]));
-  }
+  for (var k in contacts) {list.push(Object.assign({key: k}, contacts[k]));}
   list.sort(function(a, b) {return a.name.localeCompare(b.name);});
   return list;
 }
@@ -473,9 +481,11 @@ function calcStats() {
     if (!d.paid && d.stage === "Closed") {u += d.comm; uc++;}
     if (d.stage === "Under Contract") {pi += d.comm; pc++;}
     if (d.stage === "Closed") {v += d.sale; cc++;}
-    if (d.remax && d.stage === "Closed") {r += d.comm; rc++;}
+    if (d.remax && d.stage === "Closed") {
+      r += getCGI(d); rc++;
+    }
   }
-  return {total:t,paid:p,unpaid:u,pipe:pi,volume:v,remax:r/0.65,unpaidCount:uc,pipeCount:pc,closedCount:cc,remaxCount:rc};
+  return {total:t,paid:p,unpaid:u,pipe:pi,volume:v,remax:r,unpaidCount:uc,pipeCount:pc,closedCount:cc,remaxCount:rc};
 }
 
 function tile(label, value, color, sub) {
@@ -510,8 +520,9 @@ function renderBoard() {
     var days = deal.stage === "Under Contract" ? daysUntil(deal.close) : null;
     var dcolor = days === null ? "" : days <= 7 ? "#f87171" : days <= 14 ? "#f59e0b" : "#4b5563";
     var dlabel = days === null ? "" : days > 0 ? days+"d" : days === 0 ? "today" : Math.abs(days)+"d past";
+    var planKey = getSplitPlan(deal);
+    var planCfg = SPLIT_PLANS[planKey] || SPLIT_PLANS["65/35"];
 
-    // Build display parties line: co-agents and my clients
     var parts = [];
     if (deal.myside === "Buyer" || deal.myside === "Both") {
       var myC = deal.myClientBuyer || legacyExtract(deal.buyer);
@@ -536,6 +547,8 @@ function renderBoard() {
     html += '</div></div><div class="deal-badges">';
     html += badge(deal.stage, s.txt, s.bg);
     if (deal.myside) {var mc = MYSIDE_COLORS[deal.myside]; if (mc) html += badge(deal.myside, mc.txt, mc.bg);}
+    // Split plan badge
+    html += badge(planKey + " split", planCfg.color, planCfg.bg);
     if (!deal.paid && deal.stage === "Closed") html += badge("Unpaid", "#fcd34d", "#292010");
     if (!deal.remax) html += badge("Not RE/MAX", "#9ca3af", "#1a1a22");
     var nc = deal.updates ? deal.updates.length : 0;
@@ -558,12 +571,17 @@ function renderDetail() {
   var s = ST[deal.stage] || ST["Dead"];
   var days = deal.stage === "Under Contract" ? daysUntil(deal.close) : null;
   var dcolor = days === null ? "" : days <= 7 ? "#f87171" : days <= 14 ? "#f59e0b" : "#6b7280";
+  var planKey = getSplitPlan(deal);
+  var planCfg = SPLIT_PLANS[planKey] || SPLIT_PLANS["65/35"];
+  var cgiVal = getCGI(deal);
   document.getElementById("detail-title").textContent = deal.address;
 
   var html = '<div class="detail-top"><div>';
   html += '<div class="detail-comm">'+$c(deal.comm)+'</div>';
   if (deal.sale > 0) html += '<div class="detail-sale">Sale price: '+$c(deal.sale)+'</div>';
+  if (deal.remax && deal.stage === "Closed") html += '<div class="detail-sale" style="color:'+planCfg.color+'">RE/MAX CGI: '+$c(cgiVal)+' ('+planKey+' split)</div>';
   html += '</div><div style="text-align:right">'+badge(deal.stage, s.txt, s.bg);
+  html += '<br><span style="display:inline-block;margin-top:5px">'+badge(planKey + " split", planCfg.color, planCfg.bg)+'</span>';
   if (days !== null) html += '<div style="font-size:11px;margin-top:5px;color:'+dcolor+'">Close '+fmtDate(deal.close)+(days>0?" · "+days+"d":days===0?" · today":"")+'</div>';
   html += '</div></div>';
 
@@ -577,6 +595,15 @@ function renderDetail() {
   }
   html += '</div>';
 
+  // Split plan selector in detail view
+  html += '<div class="section-lbl" style="margin-bottom:6px">Commission Split</div>';
+  html += '<div class="split-row">';
+  for (var pk in SPLIT_PLANS) {
+    var pc = SPLIT_PLANS[pk]; var active = planKey === pk;
+    html += '<button class="split-btn" style="background:'+(active?pc.bg:"transparent")+';border-color:'+(active?pc.border || pc.color:"#1e1e2a")+';color:'+(active?pc.color:"#374151")+'" onclick="setSplitPlan(\''+pk+'\')">'+(active?"✓ ":"")+pk+'</button>';
+  }
+  html += '</div>';
+
   html += '<div class="section-lbl" style="margin-bottom:6px">My Side</div>';
   html += '<div class="myside-row">';
   for (var i = 0; i < MYSIDE_OPTS.length; i++) {
@@ -585,7 +612,6 @@ function renderDetail() {
   }
   html += '</div>';
 
-  // Deal fields
   var myClientSeller = deal.myClientSeller || legacyExtract(deal.seller);
   var myClientBuyer = deal.myClientBuyer || legacyExtract(deal.buyer);
 
@@ -624,6 +650,15 @@ function renderDetail() {
     html += '<button class="btn-delete" onclick="confirmDel=true;renderDetail()">Delete Deal</button>';
   }
   document.getElementById("detail-body").innerHTML = html;
+}
+
+function setSplitPlan(plan) {
+  var next = [];
+  for (var i = 0; i < deals.length; i++) {
+    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.splitPlan = plan; next.push(d);}
+    else next.push(deals[i]);
+  }
+  persist(next, true); renderDetail();
 }
 
 function setMySide(opt) {
@@ -677,7 +712,7 @@ function deleteDeal() {
 
 function openAdd() {
   formMode = "add";
-  formData = {address:"",myClientSeller:"",myClientBuyer:"",coAgentBuyer:"",coAgentSeller:"",title:"",sale:"",comm:"",stage:"Under Contract",close:"",paid:false,remax:false,myside:""};
+  formData = {address:"",myClientSeller:"",myClientBuyer:"",coAgentBuyer:"",coAgentSeller:"",title:"",sale:"",comm:"",stage:"Under Contract",close:"",paid:false,remax:false,myside:"",splitPlan:"95/5"};
   document.getElementById("form-title-label").textContent = "New Deal";
   renderForm(); show("form");
 }
@@ -685,9 +720,9 @@ function openAdd() {
 function openEdit() {
   formMode = "edit";
   for (var i = 0; i < deals.length; i++) {if (deals[i].id === currentId) {formData = Object.assign({}, deals[i]); break;}}
-  // Migrate legacy fields
   if (!formData.myClientSeller && formData.seller) formData.myClientSeller = legacyExtract(formData.seller);
   if (!formData.myClientBuyer && formData.buyer) formData.myClientBuyer = legacyExtract(formData.buyer);
+  if (!formData.splitPlan) formData.splitPlan = "65/35";
   document.getElementById("form-title-label").textContent = "Edit Deal";
   renderForm(); show("form");
 }
@@ -696,7 +731,17 @@ function formBack() {show(formMode === "add" ? "board" : "detail");}
 
 function renderForm() {
   var f = formData;
+  var planKey = f.splitPlan || "95/5";
+  var planCfg = SPLIT_PLANS[planKey] || SPLIT_PLANS["95/5"];
   var html = ff("Property Address", "address", "text", "123 Main St, City");
+
+  // Split plan selector
+  html += '<div class="form-field"><label class="form-label">Commission Split Plan</label><div class="split-row">';
+  for (var pk in SPLIT_PLANS) {
+    var pc = SPLIT_PLANS[pk]; var active = planKey === pk;
+    html += '<button class="split-btn" style="background:'+(active?pc.bg:"transparent")+';border-color:'+(active?pc.color:"#1e1e2a")+';color:'+(active?pc.color:"#374151")+'" onclick="setFormSplitPlan(\''+pk+'\')">'+(active?"✓ ":"")+pk+'</button>';
+  }
+  html += '</div></div>';
 
   html += '<div class="form-field"><label class="form-label">Stage</label><div class="stage-row">';
   var stages = ["Under Contract","Closed","Dead"];
@@ -713,7 +758,6 @@ function renderForm() {
   }
   html += '</div></div>';
 
-  // Listing side -- client info
   if (f.myside === "Listing" || f.myside === "Both") {
     html += '<div class="client-section">';
     html += '<div class="client-section-label">'+(f.myside==="Both"?"My Seller":"My Client")+'</div>';
@@ -730,7 +774,6 @@ function renderForm() {
     html += '</div>';
   }
 
-  // Buyer side -- client info
   if (f.myside === "Buyer" || f.myside === "Both") {
     html += '<div class="client-section">';
     html += '<div class="client-section-label">'+(f.myside==="Both"?"My Buyer":"My Client")+'</div>';
@@ -747,12 +790,11 @@ function renderForm() {
     html += '</div>';
   }
 
-  // Deal details -- co-agent and transaction info
   html += ff("Buyer Agent", "coAgentBuyer", "text", "Other agent name (buyer side)");
   html += ff("Seller Agent", "coAgentSeller", "text", "Other agent name (seller side)");
   html += ff("Title Co", "title", "text", "Title Company");
   html += ff("Sale Price", "sale", "number", "0");
-  html += ff("Net Commission (65/35)", "comm", "number", "0.00");
+  html += ff("Net Commission (" + planKey + " split)", "comm", "number", "0.00");
   html += ff("Close Date", "close", "date", "");
 
   html += '<div class="toggle-row">';
@@ -775,41 +817,35 @@ function ff(label, key, type, placeholder) {
 }
 
 function onFormInput(key) {
-  // Re-render form if client name changed to show/hide phone-on-file hint
   if (key === "myClientSeller" || key === "myClientBuyer") renderForm();
 }
 
 function setFormStage(sg) {formData.stage = sg; renderForm();}
 function setFormMySide(opt) {formData.myside = (formData.myside === opt ? "" : opt); renderForm();}
+function setFormSplitPlan(plan) {formData.splitPlan = plan; renderForm();}
 function toggleForm(k) {formData[k] = !formData[k]; renderForm();}
 
 function saveDeal() {
   var d = Object.assign({}, formData);
   d.sale = parseFloat(d.sale) || 0;
   d.comm = parseFloat(d.comm) || 0;
+  if (!d.splitPlan) d.splitPlan = "95/5";
 
-  // Save client phone and address into contacts, most recent deal wins for address
   if (d.myClientSeller) {
     var k = normalizeKey(d.myClientSeller);
     if (!contacts[k]) contacts[k] = {name:d.myClientSeller, role:"Seller", phone:"", addr:"", notes:"", lastDealId:d.id, lastDealAddr:d.address, lastClose:d.close};
     if (d.mySellerPhone) contacts[k].phone = d.mySellerPhone;
     if (d.mySellerAddr) contacts[k].addr = d.mySellerAddr;
-    contacts[k].lastDealId = d.id;
-    contacts[k].lastDealAddr = d.address;
-    contacts[k].lastClose = d.close;
-    contacts[k].name = d.myClientSeller;
-    contacts[k].role = "Seller";
+    contacts[k].lastDealId = d.id; contacts[k].lastDealAddr = d.address; contacts[k].lastClose = d.close;
+    contacts[k].name = d.myClientSeller; contacts[k].role = "Seller";
   }
   if (d.myClientBuyer) {
     var k = normalizeKey(d.myClientBuyer);
     if (!contacts[k]) contacts[k] = {name:d.myClientBuyer, role:"Buyer", phone:"", addr:"", notes:"", lastDealId:d.id, lastDealAddr:d.address, lastClose:d.close};
     if (d.myBuyerPhone) contacts[k].phone = d.myBuyerPhone;
     if (d.myBuyerAddr) contacts[k].addr = d.myBuyerAddr;
-    contacts[k].lastDealId = d.id;
-    contacts[k].lastDealAddr = d.address;
-    contacts[k].lastClose = d.close;
-    contacts[k].name = d.myClientBuyer;
-    contacts[k].role = "Buyer";
+    contacts[k].lastDealId = d.id; contacts[k].lastDealAddr = d.address; contacts[k].lastClose = d.close;
+    contacts[k].name = d.myClientBuyer; contacts[k].role = "Buyer";
   }
 
   if (formMode === "add") {
@@ -846,17 +882,8 @@ function ping(msg, type) {
   toastTimer = setTimeout(function() {t.style.display = "none";}, 2600);
 }
 
-function normalizeKey(name) {
-  if (!name) return "";
-  return name.toLowerCase()
-    .replace(/\s*&\s*/g, " ")
-    .replace(/\s+and\s+/g, " ")
-    .replace(/[^a-z0-9 ]/g, "")
-    .trim()
-    .replace(/\s+/g, "-");
-}
-
 cloudLoad(function() {renderBoard();});
 </script>
+
 </body>
 </html>
