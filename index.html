@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -106,11 +105,57 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 .csv-modal-btns{display:flex;gap:8px;margin-top:12px}
 .client-section{background:#16161f;border:1px solid #2a2535;border-radius:10px;padding:12px 14px;margin-bottom:11px}
 .client-section-label{font-size:10px;font-weight:700;color:#7c3aed;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px}
+/* Token setup screen */
+.setup-screen{padding:24px 20px;max-width:480px;margin:0 auto}
+.setup-title{font-size:18px;font-weight:800;color:#fff;margin-bottom:8px}
+.setup-sub{font-size:12px;color:#6b7280;margin-bottom:24px;line-height:1.6}
+.setup-step{background:#111118;border:1px solid #1e1e2a;border-radius:10px;padding:14px 16px;margin-bottom:10px}
+.setup-step-num{font-size:10px;font-weight:700;color:#cc0000;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:4px}
+.setup-step-text{font-size:12px;color:#9ca3af;line-height:1.6}
+.setup-step-text a{color:#60a5fa;text-decoration:none}
+.setup-input-wrap{margin-top:20px}
 </style>
 </head>
 <body>
 
-<div id="screen-board" class="screen active">
+<!-- TOKEN SETUP SCREEN -->
+<div id="screen-setup" class="screen active">
+  <div class="setup-screen">
+    <div class="brand" style="margin-bottom:20px">
+      <div class="brand-icon">R</div>
+      <div>
+        <div class="brand-name">Deal Tracker</div>
+        <div class="brand-sub">GitHub Storage Setup</div>
+      </div>
+    </div>
+    <div class="setup-title">One-time setup</div>
+    <div class="setup-sub">Your deals are now stored directly in your GitHub repo. You just need a token so the app can read and write your data. This takes about 2 minutes and you only do it once.</div>
+
+    <div class="setup-step">
+      <div class="setup-step-num">Step 1</div>
+      <div class="setup-step-text">Go to <a href="https://github.com/settings/tokens/new" target="_blank">github.com/settings/tokens/new</a></div>
+    </div>
+    <div class="setup-step">
+      <div class="setup-step-num">Step 2</div>
+      <div class="setup-step-text">Give it any name (e.g. "Deal Tracker"). Set expiration to "No expiration". Under <strong style="color:#e8e4dc">Scopes</strong>, check the box next to <strong style="color:#e8e4dc">repo</strong>. Scroll down and click <strong style="color:#e8e4dc">Generate token</strong>.</div>
+    </div>
+    <div class="setup-step">
+      <div class="setup-step-num">Step 3</div>
+      <div class="setup-step-text">Copy the token GitHub shows you (starts with <strong style="color:#e8e4dc">ghp_</strong>) and paste it below. GitHub only shows it once.</div>
+    </div>
+
+    <div class="setup-input-wrap">
+      <div class="form-field">
+        <label class="form-label">GitHub Personal Access Token</label>
+        <input id="setup-token-input" class="form-input" type="password" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
+      </div>
+      <button class="btn-full" onclick="saveToken()">Save Token and Load Deals</button>
+      <div id="setup-error" style="color:#f87171;font-size:11px;text-align:center;margin-top:10px;display:none"></div>
+    </div>
+  </div>
+</div>
+
+<div id="screen-board" class="screen">
   <div class="header">
     <div class="header-top">
       <div class="brand">
@@ -184,9 +229,14 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 </div>
 
 <script>
-var BIN_ID  = "69c57d8caa77b81da92222fc";
-var API_KEY = "$2a$10$Jw0jOjJ3zC3xcmklD3sn3eSgHfvGo84McIjbNTWZlY3ElL3ImTemW";
-var BIN_URL = "https://api.jsonbin.io/v3/b/" + BIN_ID;
+// ---- GITHUB CONFIG ----
+var GITHUB_OWNER = "pspettel";
+var GITHUB_REPO  = "dealtracker";
+var GITHUB_FILE  = "data.json";
+var GITHUB_API   = "https://api.github.com/repos/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/contents/" + GITHUB_FILE;
+
+var ghToken = "";
+var ghFileSha = ""; // needed for updates -- GitHub requires the SHA of the current file
 
 var deals = [];
 var contacts = {};
@@ -199,15 +249,12 @@ var formData = {};
 var confirmDel = false;
 var saveTimer = null;
 
-// Split plan config
 var SPLIT_PLANS = {
   "65/35": { divisor: 0.65, label: "65/35", color: "#fb923c", bg: "#2a1a0a" },
   "95/5":  { divisor: 0.95, label: "95/5",  color: "#34d399", bg: "#0a2a1a" }
 };
 
-function getSplitPlan(deal) {
-  return deal.splitPlan || "65/35";
-}
+function getSplitPlan(deal) { return deal.splitPlan || "65/35"; }
 
 function getCGI(deal) {
   if (!deal.comm || !deal.remax || deal.stage !== "Closed") return 0;
@@ -237,7 +284,175 @@ var FILTERS = [
   {label:"Not in RE/MAX",fn:function(d){return !d.remax;}}
 ];
 
-// ---- NAME HELPERS ----
+// ---- TOKEN SETUP ----
+
+function initApp() {
+  var stored = localStorage.getItem("gh-pat-dealtracker");
+  if (stored) {
+    ghToken = stored;
+    show("board");
+    cloudLoad(function() { renderBoard(); });
+  } else {
+    show("setup");
+  }
+}
+
+function saveToken() {
+  var val = document.getElementById("setup-token-input").value.trim();
+  if (!val || !val.startsWith("ghp_")) {
+    var err = document.getElementById("setup-error");
+    err.textContent = "Token should start with ghp_ -- double-check you copied the whole thing.";
+    err.style.display = "block";
+    return;
+  }
+  ghToken = val;
+  localStorage.setItem("gh-pat-dealtracker", val);
+  document.getElementById("setup-error").style.display = "none";
+  show("board");
+  document.getElementById("deal-list").innerHTML = '<div class="loading">Loading your deals...</div>';
+  cloudLoad(function() { renderBoard(); });
+}
+
+// ---- CLOUD (GITHUB) ----
+
+function cloudLoad(callback) {
+  setSaveStatus("loading");
+  fetch(GITHUB_API, {
+    headers: {
+      "Authorization": "token " + ghToken,
+      "Accept": "application/vnd.github.v3+json"
+    }
+  })
+  .then(function(r) {
+    if (r.status === 404) {
+      // File doesn't exist yet -- start fresh
+      ghFileSha = "";
+      deals = []; contacts = {};
+      setSaveStatus("saved");
+      callback();
+      return null;
+    }
+    return r.json();
+  })
+  .then(function(data) {
+    if (!data) return;
+    if (data.message && data.message.indexOf("Bad credentials") > -1) {
+      // Token is invalid -- clear it and show setup
+      localStorage.removeItem("gh-pat-dealtracker");
+      ghToken = "";
+      show("setup");
+      var err = document.getElementById("setup-error");
+      err.textContent = "Token was rejected by GitHub. Please generate a new one.";
+      err.style.display = "block";
+      return;
+    }
+    ghFileSha = data.sha || "";
+    var decoded = atob(data.content.replace(/\n/g, ""));
+    var parsed = JSON.parse(decoded);
+    deals = (parsed && Array.isArray(parsed.deals)) ? parsed.deals : [];
+    contacts = (parsed && parsed.contacts) ? parsed.contacts : {};
+    deals = deals.map(function(d) { if (!d.splitPlan) d.splitPlan = "65/35"; return d; });
+    setSaveStatus("saved");
+    callback();
+  })
+  .catch(function() {
+    // Fall back to localStorage
+    try {
+      var raw = localStorage.getItem("remax-deals-v1");
+      var parsed = raw ? JSON.parse(raw) : {};
+      deals = parsed.deals || [];
+      contacts = parsed.contacts || {};
+      deals = deals.map(function(d) { if (!d.splitPlan) d.splitPlan = "65/35"; return d; });
+    } catch(e) { deals = []; contacts = {}; }
+    setSaveStatus("saved");
+    ping("Loaded offline copy", "warn");
+    callback();
+  });
+}
+
+function cloudSave(showToast) {
+  setSaveStatus("saving");
+  var payload = { deals: deals, contacts: contacts };
+  var content = btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2))));
+  var body = {
+    message: "Deal tracker update " + new Date().toISOString(),
+    content: content
+  };
+  if (ghFileSha) body.sha = ghFileSha; // required for updates; omit for first-time create
+
+  fetch(GITHUB_API, {
+    method: "PUT",
+    headers: {
+      "Authorization": "token " + ghToken,
+      "Accept": "application/vnd.github.v3+json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data && data.content && data.content.sha) {
+      ghFileSha = data.content.sha; // update SHA for next save
+    }
+    setSaveStatus("saved");
+    try { localStorage.setItem("remax-deals-v1", JSON.stringify(payload)); } catch(e) {}
+    if (showToast) ping("Saved");
+  })
+  .catch(function() {
+    setSaveStatus("error");
+    ping("Save failed - check connection", "warn");
+    try { localStorage.setItem("remax-deals-v1", JSON.stringify(payload)); } catch(e) {}
+  });
+}
+
+function persist(nextDeals, silent) {
+  deals = nextDeals;
+  rebuildContacts();
+  try { localStorage.setItem("remax-deals-v1", JSON.stringify({deals: deals, contacts: contacts})); } catch(e) {}
+  renderBoard();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(function() { cloudSave(!silent); }, 800);
+}
+
+// ---- CONTACTS ----
+
+function rebuildContacts() {
+  var newContacts = {};
+  var sorted = deals.slice().sort(function(a, b) {
+    var da = a.close || ""; var db = b.close || "";
+    return da > db ? 1 : da < db ? -1 : 0;
+  });
+  for (var i = 0; i < sorted.length; i++) {
+    var deal = sorted[i];
+    var clients = getDealClients(deal);
+    for (var j = 0; j < clients.length; j++) {
+      var c = clients[j];
+      if (!c.key) continue;
+      var existing = newContacts[c.key] || contacts[c.key] || {};
+      newContacts[c.key] = {
+        name: c.name, role: c.role,
+        phone: existing.phone || "", addr: existing.addr || "", notes: existing.notes || "",
+        lastDealId: deal.id, lastDealAddr: deal.address, lastClose: deal.close
+      };
+    }
+  }
+  contacts = newContacts;
+}
+
+function buildClientList() {
+  var list = [];
+  for (var k in contacts) { list.push(Object.assign({key: k}, contacts[k])); }
+  list.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  return list;
+}
+
+function setSaveStatus(s) {
+  var btn = document.getElementById("save-btn"); if (!btn) return;
+  if (s === "saved")   { btn.style.color="#34d399"; btn.style.borderColor="#1a3a2a"; btn.textContent="Saved"; }
+  if (s === "saving")  { btn.style.color="#6b7280"; btn.style.borderColor="#2a2a38"; btn.textContent="Saving..."; }
+  if (s === "loading") { btn.style.color="#6b7280"; btn.style.borderColor="#2a2a38"; btn.textContent="Loading..."; }
+  if (s === "error")   { btn.style.color="#f87171"; btn.style.borderColor="#5a1f1f"; btn.textContent="Save Error"; }
+}
 
 function legacyExtract(str) {
   if (!str) return "";
@@ -270,110 +485,11 @@ function getDealClients(deal) {
   return clients;
 }
 
-// ---- CLOUD ----
-
-function cloudLoad(callback) {
-  setSaveStatus("loading");
-  fetch(BIN_URL + "/latest", {headers: {"X-Master-Key": API_KEY, "X-Bin-Meta": "false"}})
-  .then(function(r) {return r.json();})
-  .then(function(data) {
-    deals = (data && Array.isArray(data.deals) && data.deals.length > 0) ? data.deals : [];
-    contacts = (data && data.contacts) ? data.contacts : {};
-    // Migrate: default splitPlan to 65/35 for any deal missing it
-    deals = deals.map(function(d) {
-      if (!d.splitPlan) d.splitPlan = "65/35";
-      return d;
-    });
-    setSaveStatus("saved");
-    callback();
-  })
-  .catch(function() {
-    try {
-      var raw = localStorage.getItem("remax-deals-v1");
-      var parsed = raw ? JSON.parse(raw) : {};
-      deals = parsed.deals || [];
-      contacts = parsed.contacts || {};
-      deals = deals.map(function(d) {if (!d.splitPlan) d.splitPlan = "65/35"; return d;});
-    } catch(e) {deals = []; contacts = {};}
-    setSaveStatus("saved");
-    ping("Loaded offline copy", "warn");
-    callback();
-  });
-}
-
-function cloudSave(showToast) {
-  setSaveStatus("saving");
-  var payload = {deals: deals, contacts: contacts};
-  fetch(BIN_URL, {method: "PUT", headers: {"Content-Type": "application/json", "X-Master-Key": API_KEY}, body: JSON.stringify(payload)})
-  .then(function(r) {return r.json();})
-  .then(function() {
-    setSaveStatus("saved");
-    try {localStorage.setItem("remax-deals-v1", JSON.stringify(payload));} catch(e) {}
-    if (showToast) ping("Saved");
-  })
-  .catch(function() {
-    setSaveStatus("error");
-    ping("Save failed - check connection", "warn");
-    try {localStorage.setItem("remax-deals-v1", JSON.stringify(payload));} catch(e) {}
-  });
-}
-
-function persist(nextDeals, silent) {
-  deals = nextDeals;
-  rebuildContacts();
-  try {localStorage.setItem("remax-deals-v1", JSON.stringify({deals: deals, contacts: contacts}));} catch(e) {}
-  renderBoard();
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(function() {cloudSave(!silent);}, 800);
-}
-
-// ---- CONTACTS ----
-
-function rebuildContacts() {
-  var newContacts = {};
-  var sorted = deals.slice().sort(function(a, b) {
-    var da = a.close || ""; var db = b.close || "";
-    return da > db ? 1 : da < db ? -1 : 0;
-  });
-  for (var i = 0; i < sorted.length; i++) {
-    var deal = sorted[i];
-    var clients = getDealClients(deal);
-    for (var j = 0; j < clients.length; j++) {
-      var c = clients[j];
-      if (!c.key) continue;
-      var existing = newContacts[c.key] || contacts[c.key] || {};
-      newContacts[c.key] = {
-        name: c.name, role: c.role,
-        phone: existing.phone || "", addr: existing.addr || "", notes: existing.notes || "",
-        lastDealId: deal.id, lastDealAddr: deal.address, lastClose: deal.close
-      };
-    }
-  }
-  contacts = newContacts;
-}
-
-function buildClientList() {
-  var list = [];
-  for (var k in contacts) {list.push(Object.assign({key: k}, contacts[k]));}
-  list.sort(function(a, b) {return a.name.localeCompare(b.name);});
-  return list;
-}
-
-function setSaveStatus(s) {
-  var btn = document.getElementById("save-btn"); if (!btn) return;
-  if (s === "saved")   {btn.style.color="#34d399"; btn.style.borderColor="#1a3a2a"; btn.textContent="Saved";}
-  if (s === "saving")  {btn.style.color="#6b7280"; btn.style.borderColor="#2a2a38"; btn.textContent="Saving...";}
-  if (s === "loading") {btn.style.color="#6b7280"; btn.style.borderColor="#2a2a38"; btn.textContent="Loading...";}
-  if (s === "error")   {btn.style.color="#f87171"; btn.style.borderColor="#5a1f1f"; btn.textContent="Save Error";}
-}
-
-function $c(n) {return n ? "$" + Number(n).toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2}) : "-";}
-function fmtDate(s) {if (!s) return "-"; var d = new Date(s + "T12:00:00"); return d.toLocaleDateString("en-US", {month:"short",day:"numeric",year:"2-digit"});}
-function daysUntil(s) {if (!s) return null; return Math.ceil((new Date(s + "T12:00:00") - new Date()) / 86400000);}
-function esc(s) {return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
-function badge(label, color, bg) {return '<span class="badge" style="background:'+bg+';color:'+color+'">'+esc(label)+'</span>';}
-
-// ---- RENDER BOARD ----
+function $c(n) { return n ? "$" + Number(n).toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2}) : "-"; }
+function fmtDate(s) { if (!s) return "-"; var d = new Date(s + "T12:00:00"); return d.toLocaleDateString("en-US", {month:"short",day:"numeric",year:"2-digit"}); }
+function daysUntil(s) { if (!s) return null; return Math.ceil((new Date(s + "T12:00:00") - new Date()) / 86400000); }
+function esc(s) { return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function badge(label, color, bg) { return '<span class="badge" style="background:'+bg+';color:'+color+'">'+esc(label)+'</span>'; }
 
 function switchTab(tab) {
   activeTab = tab;
@@ -438,52 +554,46 @@ function updateContact(field, value) {
   if (!contacts[currentClientKey]) return;
   contacts[currentClientKey][field] = value;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(function() {cloudSave(false);}, 1000);
+  saveTimer = setTimeout(function() { cloudSave(false); }, 1000);
 }
-
-// ---- EXPORT ----
 
 function exportCSV() {
   var list = buildClientList();
-  if (!list.length) {ping("No clients to export", "warn"); return;}
+  if (!list.length) { ping("No clients to export", "warn"); return; }
   var rows = [["Name","Role","Last Deal Address","Close Month/Year","Close Date","Phone","Current Address","Notes"]];
   for (var i = 0; i < list.length; i++) {
     var c = list[i];
     var moyr = "";
-    if (c.lastClose) {var dt = new Date(c.lastClose + "T12:00:00"); moyr = dt.toLocaleDateString("en-US", {month:"long",year:"numeric"});}
+    if (c.lastClose) { var dt = new Date(c.lastClose + "T12:00:00"); moyr = dt.toLocaleDateString("en-US", {month:"long",year:"numeric"}); }
     rows.push([c.name, c.role === "Seller" ? "Listing" : "Buyer", c.lastDealAddr, moyr, fmtDate(c.lastClose), c.phone, c.addr, c.notes]);
   }
   var csv = rows.map(function(row) {
-    return row.map(function(cell) {return '"' + String(cell || "").replace(/"/g, '""') + '"';}).join(",");
+    return row.map(function(cell) { return '"' + String(cell || "").replace(/"/g, '""') + '"'; }).join(",");
   }).join("\n");
   document.getElementById("csv-text").value = csv;
   document.getElementById("csv-overlay").classList.add("open");
-  setTimeout(function() {var ta = document.getElementById("csv-text"); ta.focus(); ta.select();}, 100);
+  setTimeout(function() { var ta = document.getElementById("csv-text"); ta.focus(); ta.select(); }, 100);
 }
 
 function copyCsv() {
   var ta = document.getElementById("csv-text"); ta.select();
   try {
-    navigator.clipboard.writeText(ta.value).then(function() {ping("Copied to clipboard"); closeCsvModal();})
-    .catch(function() {document.execCommand("copy"); ping("Copied"); closeCsvModal();});
-  } catch(e) {document.execCommand("copy"); ping("Copied!"); closeCsvModal();}
+    navigator.clipboard.writeText(ta.value).then(function() { ping("Copied to clipboard"); closeCsvModal(); })
+    .catch(function() { document.execCommand("copy"); ping("Copied"); closeCsvModal(); });
+  } catch(e) { document.execCommand("copy"); ping("Copied!"); closeCsvModal(); }
 }
 
-function closeCsvModal() {document.getElementById("csv-overlay").classList.remove("open");}
-
-// ---- STATS ----
+function closeCsvModal() { document.getElementById("csv-overlay").classList.remove("open"); }
 
 function calcStats() {
   var t=0,p=0,u=0,pi=0,v=0,r=0,uc=0,pc=0,cc=0,rc=0;
   for (var i = 0; i < deals.length; i++) {
     var d = deals[i]; t += d.comm;
     if (d.paid) p += d.comm;
-    if (!d.paid && d.stage === "Closed") {u += d.comm; uc++;}
-    if (d.stage === "Under Contract") {pi += d.comm; pc++;}
-    if (d.stage === "Closed") {v += d.sale; cc++;}
-    if (d.remax && d.stage === "Closed") {
-      r += getCGI(d); rc++;
-    }
+    if (!d.paid && d.stage === "Closed") { u += d.comm; uc++; }
+    if (d.stage === "Under Contract") { pi += d.comm; pc++; }
+    if (d.stage === "Closed") { v += d.sale; cc++; }
+    if (d.remax && d.stage === "Closed") { r += getCGI(d); rc++; }
   }
   return {total:t,paid:p,unpaid:u,pipe:pi,volume:v,remax:r,unpaidCount:uc,pipeCount:pc,closedCount:cc,remaxCount:rc};
 }
@@ -510,9 +620,9 @@ function renderBoard() {
   document.getElementById("filters").innerHTML = fhtml;
 
   var ff = null;
-  for (var i = 0; i < FILTERS.length; i++) {if (FILTERS[i].label === activeFilter) {ff = FILTERS[i]; break;}}
+  for (var i = 0; i < FILTERS.length; i++) { if (FILTERS[i].label === activeFilter) { ff = FILTERS[i]; break; } }
   var visible = ff ? deals.filter(ff.fn) : deals;
-  if (!visible.length) {document.getElementById("deal-list").innerHTML = '<div class="empty">No deals here</div>'; return;}
+  if (!visible.length) { document.getElementById("deal-list").innerHTML = '<div class="empty">No deals here</div>'; return; }
 
   var html = "";
   for (var i = 0; i < visible.length; i++) {
@@ -546,8 +656,7 @@ function renderBoard() {
     if (days !== null) html += '<div class="deal-days" style="color:'+dcolor+'">'+dlabel+'</div>';
     html += '</div></div><div class="deal-badges">';
     html += badge(deal.stage, s.txt, s.bg);
-    if (deal.myside) {var mc = MYSIDE_COLORS[deal.myside]; if (mc) html += badge(deal.myside, mc.txt, mc.bg);}
-    // Split plan badge
+    if (deal.myside) { var mc = MYSIDE_COLORS[deal.myside]; if (mc) html += badge(deal.myside, mc.txt, mc.bg); }
     html += badge(planKey + " split", planCfg.color, planCfg.bg);
     if (!deal.paid && deal.stage === "Closed") html += badge("Unpaid", "#fcd34d", "#292010");
     if (!deal.remax) html += badge("Not RE/MAX", "#9ca3af", "#1a1a22");
@@ -558,15 +667,13 @@ function renderBoard() {
   document.getElementById("deal-list").innerHTML = html;
 }
 
-function setFilter(f) {activeFilter = f; renderBoard();}
+function setFilter(f) { activeFilter = f; renderBoard(); }
 
-// ---- DETAIL ----
-
-function openDetail(id) {currentId = id; confirmDel = false; renderDetail(); show("detail");}
+function openDetail(id) { currentId = id; confirmDel = false; renderDetail(); show("detail"); }
 
 function renderDetail() {
   var deal = null;
-  for (var i = 0; i < deals.length; i++) {if (deals[i].id === currentId) {deal = deals[i]; break;}}
+  for (var i = 0; i < deals.length; i++) { if (deals[i].id === currentId) { deal = deals[i]; break; } }
   if (!deal) return;
   var s = ST[deal.stage] || ST["Dead"];
   var days = deal.stage === "Under Contract" ? daysUntil(deal.close) : null;
@@ -595,7 +702,6 @@ function renderDetail() {
   }
   html += '</div>';
 
-  // Split plan selector in detail view
   html += '<div class="section-lbl" style="margin-bottom:6px">Commission Split</div>';
   html += '<div class="split-row">';
   for (var pk in SPLIT_PLANS) {
@@ -655,7 +761,7 @@ function renderDetail() {
 function setSplitPlan(plan) {
   var next = [];
   for (var i = 0; i < deals.length; i++) {
-    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.splitPlan = plan; next.push(d);}
+    if (deals[i].id === currentId) { var d = Object.assign({}, deals[i]); d.splitPlan = plan; next.push(d); }
     else next.push(deals[i]);
   }
   persist(next, true); renderDetail();
@@ -664,7 +770,7 @@ function setSplitPlan(plan) {
 function setMySide(opt) {
   var next = [];
   for (var i = 0; i < deals.length; i++) {
-    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.myside = (d.myside === opt ? "" : opt); next.push(d);}
+    if (deals[i].id === currentId) { var d = Object.assign({}, deals[i]); d.myside = (d.myside === opt ? "" : opt); next.push(d); }
     else next.push(deals[i]);
   }
   persist(next, true); renderDetail();
@@ -673,18 +779,18 @@ function setMySide(opt) {
 function togglePaid() {
   var next = [];
   for (var i = 0; i < deals.length; i++) {
-    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.paid = !d.paid; next.push(d);}
+    if (deals[i].id === currentId) { var d = Object.assign({}, deals[i]); d.paid = !d.paid; next.push(d); }
     else next.push(deals[i]);
   }
   persist(next);
-  ping(next.filter(function(d) {return d.id === currentId;})[0].paid ? "Marked paid" : "Marked unpaid");
+  ping(next.filter(function(d) { return d.id === currentId; })[0].paid ? "Marked paid" : "Marked unpaid");
   renderDetail();
 }
 
 function setStage(stage) {
   var next = [];
   for (var i = 0; i < deals.length; i++) {
-    if (deals[i].id === currentId) {var d = Object.assign({}, deals[i]); d.stage = stage; next.push(d);}
+    if (deals[i].id === currentId) { var d = Object.assign({}, deals[i]); d.stage = stage; next.push(d); }
     else next.push(deals[i]);
   }
   persist(next); ping("Moved to " + stage); renderDetail();
@@ -704,11 +810,9 @@ function saveNote() {
 }
 
 function deleteDeal() {
-  var next = deals.filter(function(d) {return d.id !== currentId;});
+  var next = deals.filter(function(d) { return d.id !== currentId; });
   persist(next); ping("Deleted"); showBoard();
 }
-
-// ---- FORM ----
 
 function openAdd() {
   formMode = "add";
@@ -719,7 +823,7 @@ function openAdd() {
 
 function openEdit() {
   formMode = "edit";
-  for (var i = 0; i < deals.length; i++) {if (deals[i].id === currentId) {formData = Object.assign({}, deals[i]); break;}}
+  for (var i = 0; i < deals.length; i++) { if (deals[i].id === currentId) { formData = Object.assign({}, deals[i]); break; } }
   if (!formData.myClientSeller && formData.seller) formData.myClientSeller = legacyExtract(formData.seller);
   if (!formData.myClientBuyer && formData.buyer) formData.myClientBuyer = legacyExtract(formData.buyer);
   if (!formData.splitPlan) formData.splitPlan = "65/35";
@@ -727,15 +831,13 @@ function openEdit() {
   renderForm(); show("form");
 }
 
-function formBack() {show(formMode === "add" ? "board" : "detail");}
+function formBack() { show(formMode === "add" ? "board" : "detail"); }
 
 function renderForm() {
   var f = formData;
   var planKey = f.splitPlan || "95/5";
-  var planCfg = SPLIT_PLANS[planKey] || SPLIT_PLANS["95/5"];
   var html = ff("Property Address", "address", "text", "123 Main St, City");
 
-  // Split plan selector
   html += '<div class="form-field"><label class="form-label">Commission Split Plan</label><div class="split-row">';
   for (var pk in SPLIT_PLANS) {
     var pc = SPLIT_PLANS[pk]; var active = planKey === pk;
@@ -759,8 +861,7 @@ function renderForm() {
   html += '</div></div>';
 
   if (f.myside === "Listing" || f.myside === "Both") {
-    html += '<div class="client-section">';
-    html += '<div class="client-section-label">'+(f.myside==="Both"?"My Seller":"My Client")+'</div>';
+    html += '<div class="client-section"><div class="client-section-label">'+(f.myside==="Both"?"My Seller":"My Client")+'</div>';
     html += ff("Client Name", "myClientSeller", "text", "First and Last Name");
     var sellerKey = normalizeKey(f.myClientSeller || "");
     var sellerContact = contacts[sellerKey] || {};
@@ -775,8 +876,7 @@ function renderForm() {
   }
 
   if (f.myside === "Buyer" || f.myside === "Both") {
-    html += '<div class="client-section">';
-    html += '<div class="client-section-label">'+(f.myside==="Both"?"My Buyer":"My Client")+'</div>';
+    html += '<div class="client-section"><div class="client-section-label">'+(f.myside==="Both"?"My Buyer":"My Client")+'</div>';
     html += ff("Client Name", "myClientBuyer", "text", "First and Last Name");
     var buyerKey = normalizeKey(f.myClientBuyer || "");
     var buyerContact = contacts[buyerKey] || {};
@@ -820,10 +920,10 @@ function onFormInput(key) {
   if (key === "myClientSeller" || key === "myClientBuyer") renderForm();
 }
 
-function setFormStage(sg) {formData.stage = sg; renderForm();}
-function setFormMySide(opt) {formData.myside = (formData.myside === opt ? "" : opt); renderForm();}
-function setFormSplitPlan(plan) {formData.splitPlan = plan; renderForm();}
-function toggleForm(k) {formData[k] = !formData[k]; renderForm();}
+function setFormStage(sg) { formData.stage = sg; renderForm(); }
+function setFormMySide(opt) { formData.myside = (formData.myside === opt ? "" : opt); renderForm(); }
+function setFormSplitPlan(plan) { formData.splitPlan = plan; renderForm(); }
+function toggleForm(k) { formData[k] = !formData[k]; renderForm(); }
 
 function saveDeal() {
   var d = Object.assign({}, formData);
@@ -853,7 +953,7 @@ function saveDeal() {
     persist(deals.concat([d])); ping("Deal added"); showBoard();
   } else {
     var next = [];
-    for (var i = 0; i < deals.length; i++) {next.push(deals[i].id === d.id ? d : deals[i]);}
+    for (var i = 0; i < deals.length; i++) { next.push(deals[i].id === d.id ? d : deals[i]); }
     persist(next); ping("Saved"); show("detail"); renderDetail();
   }
 }
@@ -879,11 +979,10 @@ function ping(msg, type) {
   t.style.color = warn ? "#fcd34d" : "#6ee7b7";
   t.textContent = msg; t.style.display = "block";
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function() {t.style.display = "none";}, 2600);
+  toastTimer = setTimeout(function() { t.style.display = "none"; }, 2600);
 }
 
-cloudLoad(function() {renderBoard();});
+initApp();
 </script>
-
 </body>
 </html>
