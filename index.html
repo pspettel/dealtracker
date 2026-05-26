@@ -229,14 +229,9 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 </div>
 
 <script>
-// ---- GITHUB CONFIG ----
-var GITHUB_OWNER = "pspettel";
-var GITHUB_REPO  = "dealtracker";
-var GITHUB_FILE  = "data.json";
-var GITHUB_API   = "https://api.github.com/repos/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/contents/" + GITHUB_FILE;
-
-var ghToken = "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";
-var ghFileSha = ""; // needed for updates -- GitHub requires the SHA of the current file
+// ---- SUPABASE CONFIG ----
+var SB_URL = "https://fxeksbpskucimwoojabj.supabase.co";
+var SB_KEY = "sb_publishable_pArPBvugsek-OFqa1FCsRw_LQjAn0t8";
 
 var deals = [];
 var contacts = {};
@@ -284,73 +279,49 @@ var FILTERS = [
   {label:"Not in RE/MAX",fn:function(d){return !d.remax;}}
 ];
 
-// ---- TOKEN SETUP ----
+// ---- CLOUD (SUPABASE) ----
 
 function initApp() {
   show("board");
   cloudLoad(function() { renderBoard(); });
 }
 
-function saveToken() {
-  var val = document.getElementById("setup-token-input").value.trim();
-  if (!val || !val.startsWith("ghp_")) {
-    var err = document.getElementById("setup-error");
-    err.textContent = "Token should start with ghp_ -- double-check you copied the whole thing.";
-    err.style.display = "block";
-    return;
-  }
-  ghToken = val;
-  localStorage.setItem("gh-pat-dealtracker", val);
-  document.getElementById("setup-error").style.display = "none";
-  show("board");
-  document.getElementById("deal-list").innerHTML = '<div class="loading">Loading your deals...</div>';
-  cloudLoad(function() { renderBoard(); });
-}
-
-// ---- CLOUD (GITHUB) ----
-
 function cloudLoad(callback) {
   setSaveStatus("loading");
-  fetch(GITHUB_API, {
+  fetch(SB_URL + "/rest/v1/deals?select=data&order=id.desc&limit=1", {
     headers: {
-      "Authorization": "token " + ghToken,
-      "Accept": "application/vnd.github.v3+json"
+      "apikey": SB_KEY,
+      "Authorization": "Bearer " + SB_KEY
     }
   })
-  .then(function(r) {
-    if (r.status === 404) {
-      // File doesn't exist yet -- start fresh
-      ghFileSha = "";
-      deals = []; contacts = {};
+  .then(function(r) { return r.json(); })
+  .then(function(rows) {
+    if (rows && rows.length > 0 && rows[0].data) {
+      var parsed = rows[0].data;
+      deals = (parsed && Array.isArray(parsed.deals)) ? parsed.deals : [];
+      contacts = (parsed && parsed.contacts) ? parsed.contacts : {};
+      deals = deals.map(function(d) { if (!d.splitPlan) d.splitPlan = "65/35"; return d; });
       setSaveStatus("saved");
       callback();
-      return null;
+    } else {
+      // No data yet -- start fresh and seed a row
+      deals = [];
+      contacts = {};
+      // Try to pull from localStorage as starting point
+      try {
+        var raw = localStorage.getItem("remax-deals-v1");
+        var parsed = raw ? JSON.parse(raw) : {};
+        deals = parsed.deals || [];
+        contacts = parsed.contacts || {};
+        deals = deals.map(function(d) { if (!d.splitPlan) d.splitPlan = "65/35"; return d; });
+      } catch(e) {}
+      setSaveStatus("saved");
+      callback();
+      // Immediately save whatever we have to seed the row
+      cloudSave(false);
     }
-    return r.json();
-  })
-  .then(function(data) {
-    if (!data) return;
-    if (data.message && data.message.indexOf("Bad credentials") > -1) {
-      // Token is invalid -- clear it and show setup
-      localStorage.removeItem("gh-pat-dealtracker");
-      ghToken = "";
-      show("setup");
-      var err = document.getElementById("setup-error");
-      err.textContent = "Token was rejected by GitHub. Please generate a new one.";
-      err.style.display = "block";
-      return;
-    }
-    ghFileSha = data.sha || "";
-    var decoded = atob(data.content.replace(/\n/g, ""));
-    var parsed = JSON.parse(decoded);
-    deals = (parsed && Array.isArray(parsed.deals)) ? parsed.deals : [];
-    contacts = (parsed && parsed.contacts) ? parsed.contacts : {};
-    deals = deals.map(function(d) { if (!d.splitPlan) d.splitPlan = "65/35"; return d; });
-    setSaveStatus("saved");
-    callback();
   })
   .catch(function() {
-    // Fall back to localStorage
     try {
       var raw = localStorage.getItem("remax-deals-v1");
       var parsed = raw ? JSON.parse(raw) : {};
@@ -367,30 +338,26 @@ function cloudLoad(callback) {
 function cloudSave(showToast) {
   setSaveStatus("saving");
   var payload = { deals: deals, contacts: contacts };
-  var content = btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2))));
-  var body = {
-    message: "Deal tracker update " + new Date().toISOString(),
-    content: content
-  };
-  if (ghFileSha) body.sha = ghFileSha; // required for updates; omit for first-time create
 
-  fetch(GITHUB_API, {
-    method: "PUT",
+  // Upsert a single row with id=1 -- this is our one record
+  fetch(SB_URL + "/rest/v1/deals", {
+    method: "POST",
     headers: {
-      "Authorization": "token " + ghToken,
-      "Accept": "application/vnd.github.v3+json",
-      "Content-Type": "application/json"
+      "apikey": SB_KEY,
+      "Authorization": "Bearer " + SB_KEY,
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates"
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ id: 1, data: payload })
   })
-  .then(function(r) { return r.json(); })
-  .then(function(data) {
-    if (data && data.content && data.content.sha) {
-      ghFileSha = data.content.sha; // update SHA for next save
+  .then(function(r) {
+    if (r.ok || r.status === 201 || r.status === 204) {
+      setSaveStatus("saved");
+      try { localStorage.setItem("remax-deals-v1", JSON.stringify(payload)); } catch(e) {}
+      if (showToast) ping("Saved");
+    } else {
+      return r.text().then(function(t) { throw new Error(t); });
     }
-    setSaveStatus("saved");
-    try { localStorage.setItem("remax-deals-v1", JSON.stringify(payload)); } catch(e) {}
-    if (showToast) ping("Saved");
   })
   .catch(function() {
     setSaveStatus("error");
