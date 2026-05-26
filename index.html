@@ -184,9 +184,8 @@ body{background:#0a0a0f;min-height:100vh;font-family:Georgia,serif;color:#e8e4dc
 </div>
 
 <script>
-var BIN_ID  = "69c57d8caa77b81da92222fc";
-var API_KEY = "$2a$10$Jw0jOjJ3zC3xcmklD3sn3eSgHfvGo84McIjbNTWZlY3ElL3ImTemW";
-var BIN_URL = "https://api.jsonbin.io/v3/b/" + BIN_ID;
+var SB_URL = "https://fxeksbpskucimwoojabj.supabase.co";
+var SB_KEY = "sb_publishable_pArPBvugsek-OFqa1FCsRw_LQjAn0t8";
 
 var deals = [];
 var contacts = {};
@@ -269,28 +268,38 @@ function getDealClients(deal) {
 
 function cloudLoad(callback) {
   setSaveStatus("loading");
-  fetch(BIN_URL + "/latest", {headers: {"X-Master-Key": API_KEY, "X-Bin-Meta": "false"}})
+  // Always load from localStorage first so deals show up instantly
+  try {
+    var raw = localStorage.getItem("remax-deals-v1");
+    var parsed = raw ? JSON.parse(raw) : {};
+    deals = parsed.deals || [];
+    contacts = parsed.contacts || {};
+    deals = deals.map(function(d) {if (!d.splitPlan) d.splitPlan = "65/35"; return d;});
+  } catch(e) {deals = []; contacts = {};}
+
+  // Then try Supabase -- if it has newer/more data, use that instead
+  fetch(SB_URL + "/rest/v1/deals?select=data&order=id.desc&limit=1", {
+    headers: {"apikey": SB_KEY, "Authorization": "Bearer " + SB_KEY}
+  })
   .then(function(r) {return r.json();})
-  .then(function(data) {
-    deals = (data && Array.isArray(data.deals) && data.deals.length > 0) ? data.deals : [];
-    contacts = (data && data.contacts) ? data.contacts : {};
-    deals = deals.map(function(d) {
-      if (!d.splitPlan) d.splitPlan = "65/35";
-      return d;
-    });
+  .then(function(rows) {
+    if (rows && rows.length > 0 && rows[0].data && rows[0].data.deals && rows[0].data.deals.length >= deals.length) {
+      // Supabase has equal or more deals -- use it
+      var parsed = rows[0].data;
+      deals = parsed.deals || [];
+      contacts = parsed.contacts || {};
+      deals = deals.map(function(d) {if (!d.splitPlan) d.splitPlan = "65/35"; return d;});
+      try {localStorage.setItem("remax-deals-v1", JSON.stringify({deals:deals,contacts:contacts}));} catch(e) {}
+    } else if (deals.length > 0) {
+      // localStorage has more data -- push it up to Supabase
+      cloudSave(false);
+    }
     setSaveStatus("saved");
     callback();
   })
   .catch(function() {
-    try {
-      var raw = localStorage.getItem("remax-deals-v1");
-      var parsed = raw ? JSON.parse(raw) : {};
-      deals = parsed.deals || [];
-      contacts = parsed.contacts || {};
-      deals = deals.map(function(d) {if (!d.splitPlan) d.splitPlan = "65/35"; return d;});
-    } catch(e) {deals = []; contacts = {};}
+    // Supabase unreachable -- just use localStorage, no warning
     setSaveStatus("saved");
-    ping("Loaded offline copy", "warn");
     callback();
   });
 }
@@ -298,16 +307,27 @@ function cloudLoad(callback) {
 function cloudSave(showToast) {
   setSaveStatus("saving");
   var payload = {deals: deals, contacts: contacts};
-  fetch(BIN_URL, {method: "PUT", headers: {"Content-Type": "application/json", "X-Master-Key": API_KEY}, body: JSON.stringify(payload)})
-  .then(function(r) {return r.json();})
-  .then(function() {
-    setSaveStatus("saved");
-    try {localStorage.setItem("remax-deals-v1", JSON.stringify(payload));} catch(e) {}
-    if (showToast) ping("Saved");
+  try {localStorage.setItem("remax-deals-v1", JSON.stringify(payload));} catch(e) {}
+  fetch(SB_URL + "/rest/v1/deals", {
+    method: "POST",
+    headers: {
+      "apikey": SB_KEY,
+      "Authorization": "Bearer " + SB_KEY,
+      "Content-Type": "application/json",
+      "Prefer": "resolution=merge-duplicates"
+    },
+    body: JSON.stringify({id: 1, data: payload})
+  })
+  .then(function(r) {
+    if (r.ok || r.status === 201 || r.status === 204) {
+      setSaveStatus("saved");
+      if (showToast) ping("Saved");
+    } else {
+      setSaveStatus("error");
+    }
   })
   .catch(function() {
     setSaveStatus("error");
-    ping("Save failed - check connection", "warn");
     try {localStorage.setItem("remax-deals-v1", JSON.stringify(payload));} catch(e) {}
   });
 }
